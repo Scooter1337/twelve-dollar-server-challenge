@@ -1,0 +1,108 @@
+# All-submission benchmark results
+
+Measured on 6 October 2026 on an Apple M1 Pro, using native Ubuntu 24.04 ARM64 in Docker Desktop. Every server stack had one CPU, 2 GiB RAM and no container swap; the load generator ran on separate CPUs. The table includes all 13 submitted pull requests and this Rust implementation. These are local throughput results, not official x86-64 DigitalOcean/k6 capacity scores.
+
+## Throughput
+
+Requests/second, median of three 15-second trials per workload, with two-second warmup, 64 keep-alive connections, fresh verified seed copies and varied execution order. Sorted by mixed throughput; each workload also has its own ranking.
+
+| Implementation | Feed req/s | Post req/s | Mixed req/s |
+|---|---:|---:|---:|
+| Rust / synchronous epoll | 65,949 | 329,496 | 90,893 |
+| C++ / epoll v2 #9 | 45,778 | 271,369 | 64,499 |
+| C / fio-stl #5 | 45,261 | 195,680 | 63,138 |
+| C++ / uWebSockets #6 | 42,938 | 235,782 | 62,886 |
+| C++ / epoll v1 #8 | 39,320 | 196,110 | 59,369 |
+| Bun / raw HTTP #3 | 34,431 | 147,616 | 56,375 |
+| Bun / native router #4 | 32,188 | 108,975 | 46,367 |
+| Ruby / Iodine #14 | 23,956 | 66,050 | 33,842 |
+| Python / Granian #13 | 15,441 | 42,603 | 20,393 |
+| Python / FastAPI ASGI #10 | 13,874 | 34,374 | 19,390 |
+| Python / FastAPI #1 | 10,971 | 16,999 | 12,422 |
+| Erlang / Cowboy #11 | 8,758 | 9,729 | 8,454 |
+| Ruby / Rails Metal #12 + Nginx | 7,720 | 10,502 | 8,352 |
+| Ruby / Rails #2 + Nginx | 2,212 | 2,984 | 2,636 |
+
+## Leaders and differences
+
+- Feed: Rust / synchronous epoll leads. Rust is +44.1% versus the fastest existing submission, C++ / epoll v2 #9.
+- Post: Rust / synchronous epoll leads. Rust is +21.4% versus the fastest existing submission, C++ / epoll v2 #9.
+- Mixed: Rust / synchronous epoll leads. Rust is +40.9% versus the fastest existing submission, C++ / epoll v2 #9.
+
+Across these observed trials, even Rust's slowest result exceeded every baseline's fastest result on the same workload:
+
+- Feed: +31.0% (Rust minimum 63,277; best baseline maximum 48,287 requests/s).
+- Post: +19.6% (Rust minimum 325,645; best baseline maximum 272,244 requests/s).
+- Mixed: +25.4% (Rust minimum 88,452; best baseline maximum 70,563 requests/s).
+
+## Additional mixed comparison
+
+One C++/epoll v2 mixed run in the full batch dropped to 53,059 requests/s with a 292.391 ms p99, versus 70,563 requests/s and 4.566 ms p99 in its first run. Several later feed measurements were also lower. The cause was not established. To check the mixed gain over shorter elapsed time, a separate three-trial comparison ran Rust and the three fastest existing native competitors after the full batch, with the same fresh seeds, resource limits, workload, warmup and 15-second measurement.
+
+| Implementation | Median req/s | Min–max req/s | Median p95 / p99 ms |
+|---|---:|---:|---:|
+| Rust / synchronous epoll | 90,249 | 89,935–90,551 | 2.937 / 5.950 |
+| C++ / epoll v2 #9 | 71,004 | 69,461–71,191 | 2.327 / 4.667 |
+| C++ / uWebSockets #6 | 67,462 | 66,114–67,595 | 2.239 / 4.451 |
+| C / fio-stl #5 | 62,183 | 46,968–62,463 | 2.896 / 5.594 |
+
+Rust leads this follow-up by **27.1%** over C++ / epoll v2 #9. All 12 measured runs and warmups had zero errors; all four repeated official checks passed 42/42. Binaries were identical between the two batches. The full batch's mixed median gain is 40.9%; this shorter follow-up provides a separate estimate that avoids relying on the full batch's large baseline latency spike. Raw evidence is in [`bench/confirmatory-mixed.json.gz`](bench/confirmatory-mixed.json.gz).
+
+
+## Latency and memory
+
+p95/p99 are median run percentiles in milliseconds. Memory is the median from mixed runs. Summed process RSS includes the launcher and may double-count shared pages. Peak cgroup memory includes startup, seed copying, page cache and kernel memory.
+
+| Implementation | Feed p95 / p99 ms | Post p95 / p99 ms | Mixed p95 / p99 ms | Mixed RSS sum MiB | Peak cgroup MiB |
+|---|---:|---:|---:|---:|---:|
+| Rust / synchronous epoll | 1.421 / 2.073 | 0.261 / 0.457 | 2.221 / 4.892 | 43.67 | 272.61 |
+| C++ / epoll v2 #9 | 1.626 / 2.734 | 0.390 / 0.618 | 3.564 / 6.808 | 239.65 | 263.82 |
+| C / fio-stl #5 | 1.658 / 2.350 | 0.394 / 0.493 | 2.100 / 4.408 | 61.77 | 291.56 |
+| C++ / uWebSockets #6 | 1.696 / 3.089 | 0.452 / 0.659 | 2.566 / 5.261 | 62.32 | 291.00 |
+| C++ / epoll v1 #8 | 1.878 / 3.244 | 0.554 / 0.811 | 2.948 / 5.949 | 59.11 | 287.42 |
+| Bun / raw HTTP #3 | 2.179 / 3.618 | 0.548 / 0.798 | 2.633 / 5.321 | 84.20 | 320.64 |
+| Bun / native router #4 | 2.338 / 3.686 | 0.735 / 1.104 | 2.658 / 5.535 | 101.69 | 307.19 |
+| Ruby / Iodine #14 | 3.210 / 3.958 | 1.197 / 1.669 | 2.835 / 5.900 | 83.79 | 301.40 |
+| Python / Granian #13 | 6.484 / 8.028 | 2.715 / 3.199 | 5.410 / 7.077 | 98.30 | 295.95 |
+| Python / FastAPI ASGI #10 | 5.033 / 9.207 | 2.190 / 3.942 | 5.541 / 7.542 | 93.83 | 314.75 |
+| Python / FastAPI #1 | 6.450 / 11.564 | 4.338 / 7.319 | 6.279 / 10.550 | 93.96 | 312.20 |
+| Erlang / Cowboy #11 | 10.332 / 13.247 | 9.686 / 11.799 | 10.680 / 14.287 | 109.31 | 323.75 |
+| Ruby / Rails Metal #12 + Nginx | 11.901 / 16.439 | 10.373 / 14.579 | 11.473 / 15.497 | 178.77 | 400.66 |
+| Ruby / Rails #2 + Nginx | 44.546 / 97.651 | 34.812 / 53.103 | 29.158 / 41.411 | 215.95 | 428.64 |
+
+## Trial spread
+
+Minimum–maximum requests/s across the three trials. These ranges show observed variation, not a statistical confidence interval.
+
+| Implementation | Feed | Post | Mixed |
+|---|---:|---:|---:|
+| Rust / synchronous epoll | 63,277–69,335 | 325,645–336,032 | 88,452–92,906 |
+| C++ / epoll v2 #9 | 42,150–46,589 | 258,603–272,244 | 53,059–70,563 |
+| C / fio-stl #5 | 43,280–48,287 | 188,228–197,147 | 54,935–63,545 |
+| C++ / uWebSockets #6 | 39,482–44,532 | 227,697–240,671 | 58,846–67,971 |
+| C++ / epoll v1 #8 | 37,159–40,580 | 195,620–201,072 | 50,971–62,808 |
+| Bun / raw HTTP #3 | 34,087–35,954 | 145,619–149,821 | 50,365–57,348 |
+| Bun / native router #4 | 29,769–33,183 | 107,237–112,111 | 41,390–46,553 |
+| Ruby / Iodine #14 | 23,250–25,849 | 65,506–66,177 | 31,814–33,880 |
+| Python / Granian #13 | 14,790–16,335 | 42,190–42,646 | 19,092–20,462 |
+| Python / FastAPI ASGI #10 | 13,282–14,251 | 33,757–34,484 | 17,600–19,609 |
+| Python / FastAPI #1 | 10,110–11,021 | 16,904–17,123 | 11,726–12,492 |
+| Erlang / Cowboy #11 | 7,524–8,768 | 9,637–9,784 | 8,017–8,506 |
+| Ruby / Rails Metal #12 + Nginx | 7,016–7,720 | 10,433–10,539 | 7,666–8,408 |
+| Ruby / Rails #2 + Nginx | 1,972–2,542 | 2,966–3,263 | 2,399–2,658 |
+
+## Correctness and integrity
+
+All 14 implementations passed 42/42 official API checks before the final batch. The batch contains 126 measured runs.
+
+Every final measured run and warmup reported zero socket errors/timeouts, zero HTTP errors and zero mixed-workload semantic errors.
+
+The official seed row-content hash was verified. Application source and build flags are unchanged. The Bun installer was adapted only to select the checksum-pinned official ARM64 asset of the same runtime version. Rails uses its declared Nginx deployment; Nginx and Rails share one resource-limited cgroup. Pinned Ruby and Erlang runtimes were compiled once and reused.
+
+Raw measured/warmup output, validation output, source references, binary hashes, compiler/runtime versions, CPU usage and per-process memory appear in [`bench/results.json.gz`](bench/results.json.gz). Only completed final batches are included here. Aborted setup runs contributed no rows. No builds ran during final measurements.
+
+## Limits and reproduction
+
+This establishes a ranking for the listed workloads at 64 connections on this ARM64 machine. It does not establish the official x86-64 score, performance with 15,000 active users, five-minute sustained capacity, or behaviour over a real network. The official load test has think time and different concurrency, so its ranking may differ. Three short trials provide limited evidence about variance and long-running write/checkpoint behaviour. Each implementation retains its own SQLite version and settings, so these results compare complete submissions rather than programming languages in isolation.
+
+See [bench/README.md](bench/README.md) for the method and reproduction commands. [bench/manifest.json](bench/manifest.json) pins every baseline commit.

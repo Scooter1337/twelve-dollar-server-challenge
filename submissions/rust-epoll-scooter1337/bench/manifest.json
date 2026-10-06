@@ -1,0 +1,122 @@
+{
+  "challenge": "026bdb68d94d0d932bb5981321ad82c70618d752",
+  "submissions": [
+    {
+      "id": "pr1",
+      "pr": 1,
+      "title": "Add python-fastapi-cknutson12",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/1",
+      "sha": "71d67de0e49b2152a558b41b997e9bdd918493a2",
+      "directory": "submissions/python-fastapi-cknutson12",
+      "state": "closed"
+    },
+    {
+      "id": "pr2",
+      "pr": 2,
+      "title": "Add ruby-rails-gambitboy submission",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/2",
+      "sha": "33dd92f6bc13d4b4a78e2ef3f50467fca2fc52cc",
+      "directory": "submissions/ruby-rails-gambitboy",
+      "state": "open"
+    },
+    {
+      "id": "pr3",
+      "pr": 3,
+      "title": "Add typescript-bun-xxmohamed012",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/3",
+      "sha": "7dbe6be6d4e1097b856951f2b3bc71b9e48bd387",
+      "directory": "submissions/typescript-bun-xxmohamed012",
+      "state": "open"
+    },
+    {
+      "id": "pr4",
+      "pr": 4,
+      "title": "Add minimal TypeScript/Bun submission with no npm dependencies",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/4",
+      "sha": "5244d8fe567b45bbb1894da99192a96d29b3f921",
+      "directory": "submissions/typescript-bun-tbsvttr",
+      "state": "open"
+    },
+    {
+      "id": "pr5",
+      "pr": 5,
+      "title": "Add C/fio-stl SQLite submission with two bundled libraries",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/5",
+      "sha": "63eec83f5f4af449693b04b5efe1cc072f490a31",
+      "directory": "submissions/c-fio-tbsvttr",
+      "state": "open"
+    },
+    {
+      "id": "pr6",
+      "pr": 6,
+      "title": "Add C++/uWebSockets SQLite submission",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/6",
+      "sha": "ba691aab9df3730cae0d37470ca1ea03ab83530e",
+      "directory": "submissions/cpp-uwebsockets-tbsvttr",
+      "state": "open"
+    },
+    {
+      "id": "pr8",
+      "pr": 8,
+      "title": "Add cpp-epoll-khalefa-ow submission (C++ / raw epoll, direct)",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/8",
+      "sha": "20ad0cc493da4b701d353abc484e2815156c476a",
+      "directory": "submissions/cpp-epoll-khalefa-ow",
+      "state": "open"
+    },
+    {
+      "id": "pr9",
+      "pr": 9,
+      "title": "Add cpp-epoll_inmem-khalefa-ow submission (C++ / raw epoll v2, direct)",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/9",
+      "sha": "3d92a3b349bdf8abb0425fce990fdfb8ab7dfdc3",
+      "directory": "submissions/cpp-epoll_inmem-khalefa-ow",
+      "state": "open"
+    },
+    {
+      "id": "pr10",
+      "pr": 10,
+      "title": "Add python-fastapi-tejasnafde",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/10",
+      "sha": "606970b8c9c85bcebf299f7208a99525d4d6aa23",
+      "directory": "submissions/python-fastapi-tejasnafde",
+      "state": "open"
+    },
+    {
+      "id": "pr11",
+      "pr": 11,
+      "title": "Add Erlang + Cowboy + SQLite submission",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/11",
+      "sha": "a3b1daf0cfdb37068fa0a79a39c15143cf075ac6",
+      "directory": "submissions/erlang-cowboy-tbsvttr",
+      "state": "open"
+    },
+    {
+      "id": "pr12",
+      "pr": 12,
+      "title": "Add compact Rails Metal API with prepared SQLite queries",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/12",
+      "sha": "9fafb3225f29a83b72ec5f27fb491762aad95eae",
+      "directory": "submissions/ruby-rails-tbsvttr",
+      "state": "open"
+    },
+    {
+      "id": "pr13",
+      "pr": 13,
+      "title": "Add compact Python + Granian RSGI submission",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/13",
+      "sha": "164a5df9b68fdceb3c6637c75444cffc11f58737",
+      "directory": "submissions/python-granian-tbsvttr",
+      "state": "open"
+    },
+    {
+      "id": "pr14",
+      "pr": 14,
+      "title": "Add compact Ruby + Iodine SQLite submission",
+      "url": "https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/14",
+      "sha": "dd341ea259ef0c3883dc0253c2963399d7887b57",
+      "directory": "submissions/ruby-iodine-tbsvttr",
+      "state": "open"
+    }
+  ]
+}
