@@ -89,6 +89,16 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
   check(req('POST','/posts',json.dumps({'body':'😀'*501}),auth())[0]==400,'501 Unicode code points')
   for body in [b'{"body":"\xff"}',b'{"body":"\\ud800"}',b'{"body":"x"}garbage']:
    check(req('POST','/posts',body,auth())[0]==400,'malformed Unicode/JSON')
+  for raw,expected in [('{"body":"first","body":"last"}','last'),('{"b\\u006fdy":"escaped key"}','escaped key'),('{"extra":{"body":"ignored","array":[true,1,null,{}]},"body":"kept"}','kept')]:
+   status,data=req('POST','/posts',raw,auth())
+   check(status==201 and data['post']['body']==expected,'body parser '+raw)
+  for raw in ['null','[]','"text"','123','true','{"body":"first","body":null}','{"body":{"nested":"text"}}']:
+   check(req('POST','/posts',raw,auth())==(400,{'error':'body is required'}),'non-string/missing body '+raw)
+  for raw in [b'{"body":"valid","ignored":"\\ud800"}',b'{"body":"valid","ignored":{"bad":"\\udfff"}}',b'{"body":"valid","ignored":["\xff"]}']:
+   check(req('POST','/posts',raw,auth())==(400,{'error':'malformed JSON body'}),'validate ignored JSON Unicode')
+  for name in ['x'*1000,'second','escaped " name \\ 😀','third']:
+   status,data=req('POST','/posts','{"body":"auth buffer reuse"}',auth(username=name))
+   check(status==201 and data['post']['author']==name,'JWT scratch buffers '+name[:20])
   status,post=req('POST','/posts','{"body":"concurrent likes"}',auth());post=post['post'];pid=post['id']
   with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
    replies=list(pool.map(lambda _:req('POST',f'/posts/{pid}/like',None,auth()),range(16)))

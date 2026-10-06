@@ -7,3 +7,4 @@ __pycache__/
 /bench/build-status.json
 /bench/results.json
 /bench/confirmatory-mixed.json
+/bench/optimization-results.json

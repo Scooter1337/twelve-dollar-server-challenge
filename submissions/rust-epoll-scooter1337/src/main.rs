@@ -94,6 +94,8 @@ fn positive(s: &str) -> Option<i64> {
 }
 struct Auth {
     mac: Hmac<Sha256>,
+    header: Vec<u8>,
+    payload: Vec<u8>,
 }
 #[derive(Deserialize)]
 struct Header<'a> {
@@ -116,9 +118,11 @@ impl Auth {
     fn new(secret: &str) -> Self {
         Self {
             mac: Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap(),
+            header: Vec::with_capacity(256),
+            payload: Vec::with_capacity(256),
         }
     }
-    fn user(&self, authorization: Option<&str>) -> Result<(i64, String), &'static str> {
+    fn user(&mut self, authorization: Option<&str>) -> Result<(i64, Cow<'_, str>), &'static str> {
         let token = authorization
             .and_then(|a| a.strip_prefix("Bearer "))
             .ok_or("missing bearer token")?;
@@ -133,20 +137,27 @@ impl Auth {
         if pieces.next().is_some() {
             return Err(bad);
         }
-        let sig = URL_SAFE_NO_PAD.decode(s).map_err(|_| bad)?;
+        let mut sig = [0u8; 33];
+        let n = URL_SAFE_NO_PAD.decode_slice(s, &mut sig).map_err(|_| bad)?;
         let mut mac = self.mac.clone();
         mac.update(&token.as_bytes()[..h.len() + 1 + p.len()]);
-        mac.verify_slice(&sig).map_err(|_| bad)?;
-        let header = URL_SAFE_NO_PAD.decode(h).map_err(|_| bad)?;
-        let header: Header = serde_json::from_slice(&header).map_err(|_| bad)?;
+        mac.verify_slice(&sig[..n]).map_err(|_| bad)?;
+        self.header.clear();
+        URL_SAFE_NO_PAD
+            .decode_vec(h, &mut self.header)
+            .map_err(|_| bad)?;
+        let header: Header = serde_json::from_slice(&self.header).map_err(|_| bad)?;
         if header.alg != "HS256" {
             return Err(bad);
         }
-        let payload = URL_SAFE_NO_PAD.decode(p).map_err(|_| bad)?;
+        self.payload.clear();
+        URL_SAFE_NO_PAD
+            .decode_vec(p, &mut self.payload)
+            .map_err(|_| bad)?;
         // Borrow claim spans directly; no dynamic JSON tree or per-field maps.
         // Keeping sub/name raw lets us distinguish malformed tokens from validly
         // signed tokens with a wrong payload type, as required by the spec.
-        let claims: Claims = serde_json::from_slice(&payload).map_err(|_| bad)?;
+        let claims: Claims = serde_json::from_slice(&self.payload).map_err(|_| bad)?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -161,8 +172,84 @@ impl Auth {
         let id = positive(&sub.0).ok_or(payload_error)?;
         let name: Text = serde_json::from_str(claims.username.ok_or(payload_error)?.get())
             .map_err(|_| payload_error)?;
-        let username = name.0.into_owned();
-        Ok((id, username))
+        Ok((id, name.0))
+    }
+}
+// Visit the complete JSON document, keeping only the last top-level body string.
+// Plain strings borrow the request. Escaped strings use serde's checked decoder.
+// Ignored fields are still validated, including Unicode and nested containers.
+#[derive(Clone, Copy)]
+enum BodySeed {
+    Root,
+    String,
+    Ignore,
+}
+impl<'de> serde::de::DeserializeSeed<'de> for BodySeed {
+    type Value = Option<Cow<'de, str>>;
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+        d.deserialize_any(self)
+    }
+}
+impl<'de> serde::de::Visitor<'de> for BodySeed {
+    type Value = Option<Cow<'de, str>>;
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_borrowed_str<E: serde::de::Error>(self, s: &'de str) -> Result<Self::Value, E> {
+        Ok(matches!(self, Self::String).then_some(Cow::Borrowed(s)))
+    }
+    fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Self::Value, E> {
+        Ok(if matches!(self, Self::String) {
+            Some(Cow::Owned(s.to_owned()))
+        } else {
+            None
+        })
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        while seq.next_element_seed(Self::Ignore)?.is_some() {}
+        Ok(None)
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut body = None;
+        if matches!(self, Self::Root) {
+            while let Some(Text(key)) = map.next_key::<Text<'de>>()? {
+                let value = map.next_value_seed(if key == "body" {
+                    Self::String
+                } else {
+                    Self::Ignore
+                })?;
+                if key == "body" {
+                    body = value;
+                }
+            }
+        } else {
+            while map.next_key_seed(Self::Ignore)?.is_some() {
+                map.next_value_seed(Self::Ignore)?;
+            }
+        }
+        Ok(body)
+    }
+}
+struct PostBody<'a>(Option<Cow<'a, str>>);
+impl<'de> Deserialize<'de> for PostBody<'de> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::DeserializeSeed;
+        BodySeed::Root.deserialize(d).map(Self)
     }
 }
 pub struct Frame<'a> {
@@ -185,7 +272,9 @@ pub fn frame(input: &[u8]) -> Result<Parsed<'_>, ()> {
             return if input.len() > 65536 {
                 Err(())
             } else {
-                Ok(Parsed::Incomplete { expect_continue: false })
+                Ok(Parsed::Incomplete {
+                    expect_continue: false,
+                })
             };
         }
         httparse::Status::Complete(n) => n,
@@ -325,11 +414,11 @@ impl App {
                 Err(msg) => return error(out, 401, msg),
             };
             if path == "/posts" {
-                let value: serde_json::Value = match serde_json::from_slice(&frame.body) {
+                let value: PostBody = match serde_json::from_slice(&frame.body) {
                     Ok(v) => v,
                     Err(_) => return error(out, 400, "malformed JSON body"),
                 };
-                let Some(body) = value.get("body").and_then(|v| v.as_str()) else {
+                let Some(body) = value.0 else {
                     return error(out, 400, "body is required");
                 };
                 let body = body.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
@@ -341,9 +430,11 @@ impl App {
                 }
                 return self.db.create(user, &username, body, out);
             }
-            let Some(id) = path.strip_prefix("/posts/")
+            let Some(id) = path
+                .strip_prefix("/posts/")
                 .and_then(|s| s.strip_suffix("/like"))
-                .and_then(positive) else {
+                .and_then(positive)
+            else {
                 return error(out, 400, "invalid post id");
             };
             return self.db.like(user, id, out);
@@ -375,3 +466,6 @@ fn main() {
     };
     net::run(&format!("{host}:{port}"), app, options).expect("HTTP server");
 }
+
+#[cfg(test)]
+include!("../tests/support/allocations.rs");

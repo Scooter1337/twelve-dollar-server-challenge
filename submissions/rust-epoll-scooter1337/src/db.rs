@@ -47,6 +47,7 @@ unsafe extern "C" {
     fn sqlite3_column_text(stmt: *mut Statement, idx: c_int) -> *const u8;
     fn sqlite3_column_bytes(stmt: *mut Statement, idx: c_int) -> c_int;
     fn sqlite3_changes(db: *mut Connection) -> c_int;
+    fn sqlite3_last_insert_rowid(db: *mut Connection) -> i64;
     fn sqlite3_wal_hook(
         db: *mut Connection,
         cb: Option<
@@ -116,8 +117,12 @@ pub struct Db {
     post: Stmt,
     health: Stmt,
     insert: Stmt,
+    created: Stmt,
     like: Stmt,
     exists: Stmt,
+    begin_stmt: Stmt,
+    commit_stmt: Stmt,
+    rollback_stmt: Stmt,
     raw: *mut Connection,
     wal_frames: Box<Cell<i32>>,
     pub transaction: bool,
@@ -184,15 +189,16 @@ impl Db {
             ),
             post: prepare(raw, &format!("{select} WHERE p.id=?1")),
             health: prepare(raw, "SELECT 1"),
-            insert: prepare(
-                raw,
-                "INSERT INTO posts(user_id,body) VALUES(?1,?2) RETURNING id,created_at",
-            ),
+            insert: prepare(raw, "INSERT INTO posts(user_id,body) VALUES(?1,?2)"),
+            created: prepare(raw, "SELECT created_at FROM posts WHERE id=?1"),
             like: prepare(
                 raw,
                 "INSERT INTO likes(user_id,post_id) SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM posts WHERE id=?2) ON CONFLICT(user_id,post_id) DO NOTHING",
             ),
             exists: prepare(raw, "SELECT 1 FROM posts WHERE id=?1"),
+            begin_stmt: prepare(raw, "BEGIN IMMEDIATE"),
+            commit_stmt: prepare(raw, "COMMIT"),
+            rollback_stmt: prepare(raw, "ROLLBACK"),
             raw,
             wal_frames: Box::new(Cell::new(0)),
             transaction: false,
@@ -207,22 +213,16 @@ impl Db {
         }
         db
     }
-    fn exec(&self, sql: &std::ffi::CStr) -> bool {
-        unsafe {
-            sqlite3_exec(
-                self.raw,
-                sql.as_ptr(),
-                ptr::null(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-            ) == 0
-        }
+    fn transaction_step(stmt: &mut Stmt) -> bool {
+        let ok = stmt.step() == DONE;
+        stmt.reset();
+        ok
     }
     fn begin(&mut self) -> bool {
         if !self.group || self.transaction {
             return true;
         }
-        if !self.exec(c"BEGIN IMMEDIATE") {
+        if !Self::transaction_step(&mut self.begin_stmt) {
             return false;
         }
         self.transaction = true;
@@ -232,9 +232,9 @@ impl Db {
         if !self.transaction {
             return true;
         }
-        let ok = self.exec(c"COMMIT");
+        let ok = Self::transaction_step(&mut self.commit_stmt);
         if !ok {
-            self.exec(c"ROLLBACK");
+            Self::transaction_step(&mut self.rollback_stmt);
         }
         self.transaction = false;
         ok
@@ -313,21 +313,30 @@ impl Db {
         unsafe {
             self.insert.bind_text(2, body.as_bytes());
         }
-        let mut rc = self.insert.step();
+        let rc = self.insert.step();
+        self.insert.reset();
+        if rc != DONE {
+            return crate::error(out, 500, "internal server error");
+        }
+        // Read this insert's generated ID and database-default timestamp while
+        // the event loop still owns the connection and transaction. Avoid the
+        // temporary result table that SQLite builds for INSERT ... RETURNING.
+        let id = unsafe { sqlite3_last_insert_rowid(self.raw) };
+        self.created.bind_int(1, id);
+        let mut rc = self.created.step();
         if rc == ROW {
             out.extend_from_slice(b"{\"post\":{\"id\":");
-            crate::number(self.insert.int(0) as u64, out);
+            crate::number(id as u64, out);
             out.extend_from_slice(b",\"body\":");
             crate::json_string(body.as_bytes(), out);
             out.extend_from_slice(b",\"created_at\":");
-            crate::json_string(self.insert.text(1), out);
+            crate::json_string(self.created.text(0), out);
             out.extend_from_slice(b",\"author\":");
             crate::json_string(username.as_bytes(), out);
             out.extend_from_slice(b",\"like_count\":0}}");
-            // RETURNING does not commit at SQLITE_ROW; stepping to DONE is essential.
-            rc = self.insert.step();
+            rc = self.created.step();
         }
-        self.insert.reset();
+        self.created.reset();
         if rc != DONE || out.is_empty() {
             crate::error(out, 500, "internal server error")
         } else {
@@ -382,8 +391,12 @@ impl Drop for Db {
             &mut self.post,
             &mut self.health,
             &mut self.insert,
+            &mut self.created,
             &mut self.like,
             &mut self.exists,
+            &mut self.begin_stmt,
+            &mut self.commit_stmt,
+            &mut self.rollback_stmt,
         ] {
             unsafe {
                 sqlite3_finalize(s.0);
