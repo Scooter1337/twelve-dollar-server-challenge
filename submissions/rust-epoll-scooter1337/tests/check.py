@@ -2,7 +2,7 @@
 """Black-box protocol, auth, live-read, crash-recovery and connection tests.
 Run on Linux: python3 tests/check.py --seed /path/feed.db --server target/release/twelve-rust-poll
 """
-import argparse,base64,concurrent.futures,hashlib,hmac,http.client,json,os,resource,shutil,socket,subprocess,tempfile,time
+import argparse,base64,concurrent.futures,hashlib,hmac,http.client,json,os,resource,select,shutil,socket,subprocess,tempfile,time
 p=argparse.ArgumentParser()
 p.add_argument('--seed',required=True);p.add_argument('--server',required=True)
 p.add_argument('--connections',type=int,default=15000)
@@ -63,6 +63,10 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
   raise RuntimeError('server did not start')
  try:
   start()
+  for path in ['/posts/like','/posts//like']:
+   check(req('POST',path,None)[0]==401,'missing like ID checks auth first '+path)
+   check(req('POST',path,None,auth())==(400,{'error':'invalid post id'}),'missing like ID '+path)
+   check(req('GET','/health')[0]==200,'healthy after missing like ID '+path)
   for sub in [0,1,True,'0','-1','1.5','abc',None]:
    status,data=req('POST','/posts','{"body":"x"}',auth(sub=sub))
    check((status,data)==(401,{'error':'invalid token payload'}),'invalid sub '+repr(sub))
@@ -102,6 +106,19 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
    check(wire(s)[0][0]==400,'reject ambiguous HTTP framing');s.close()
   s=sock();s.sendall(b'POST /posts HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\npartial');s.close()
   check(req('GET','/health')[0]==200,'abandoned upload')
+  s=sock()
+  for chunked in [False,True]:
+   data=b'{"body":"continue"}'
+   framing='Transfer-Encoding: chunked' if chunked else f'Content-Length: {len(data)}'
+   raw=(f'POST /posts HTTP/1.1\r\nHost: x\r\nAuthorization: {auth()}\r\nExpect: 100-continue\r\n{framing}\r\n\r\n').encode()
+   s.sendall(raw[:20]);s.sendall(raw[20:])
+   f=s.makefile('rb');check(f.readline()==b'HTTP/1.1 100 Continue\r\n' and f.readline()==b'\r\n','100 Continue '+framing);f.close()
+   first=b'3\r\n'+data[:3]+b'\r\n' if chunked else data[:3]
+   rest=(f'{len(data)-3:x}\r\n'.encode()+data[3:]+b'\r\n0\r\n\r\n') if chunked else data[3:]
+   s.sendall(first)
+   check(not select.select([s],[],[],.1)[0],'no duplicate interim response '+framing)
+   s.sendall(rest);check(wire(s)[0][0]==201,'body accepted after Continue '+framing)
+  s.close()
   # Enough output to exceed the socket send buffer; delay the reader deliberately.
   s=sock();s.setsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF,65536)
   raw=b'GET /feed HTTP/1.1\r\nHost: x\r\n\r\n'*1800

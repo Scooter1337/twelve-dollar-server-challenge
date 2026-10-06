@@ -173,7 +173,11 @@ pub struct Frame<'a> {
     pub consumed: usize,
     pub close: bool,
 }
-pub fn frame(input: &[u8]) -> Result<Option<Frame<'_>>, ()> {
+pub enum Parsed<'a> {
+    Incomplete { expect_continue: bool },
+    Complete(Frame<'a>),
+}
+pub fn frame(input: &[u8]) -> Result<Parsed<'_>, ()> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
     let end = match req.parse(input).map_err(|_| ())? {
@@ -181,7 +185,7 @@ pub fn frame(input: &[u8]) -> Result<Option<Frame<'_>>, ()> {
             return if input.len() > 65536 {
                 Err(())
             } else {
-                Ok(None)
+                Ok(Parsed::Incomplete { expect_continue: false })
             };
         }
         httparse::Status::Complete(n) => n,
@@ -189,6 +193,7 @@ pub fn frame(input: &[u8]) -> Result<Option<Frame<'_>>, ()> {
     let mut authorization = None;
     let mut length = None;
     let mut chunked = false;
+    let mut expect_continue = false;
     let mut close = req.version != Some(1);
     for h in req.headers.iter() {
         if h.name.eq_ignore_ascii_case("authorization") {
@@ -215,27 +220,32 @@ pub fn frame(input: &[u8]) -> Result<Option<Frame<'_>>, ()> {
                 .value
                 .split(|&c| c == b',')
                 .any(|v| v.trim_ascii().eq_ignore_ascii_case(b"close"));
+        } else if h.name.eq_ignore_ascii_case("expect") {
+            if !h.value.eq_ignore_ascii_case(b"100-continue") {
+                return Err(());
+            }
+            expect_continue = req.version == Some(1);
         }
+    }
+    if end > 65536 || length.is_some_and(|n| n > 1_048_576) {
+        return Err(());
     }
     let (body, consumed) = if chunked {
         if length.is_some() {
             return Err(());
         }
         let Some((body, n)) = chunks(&input[end..])? else {
-            return Ok(None);
+            return Ok(Parsed::Incomplete { expect_continue });
         };
         (Cow::Owned(body), end + n)
     } else {
         let length = length.unwrap_or(0);
-        if length > 1_048_576 || end > 65536 {
-            return Err(());
-        }
         if input.len() < end + length {
-            return Ok(None);
+            return Ok(Parsed::Incomplete { expect_continue });
         }
         (Cow::Borrowed(&input[end..end + length]), end + length)
     };
-    Ok(Some(Frame {
+    Ok(Parsed::Complete(Frame {
         method: req.method.ok_or(())?,
         path: req.path.ok_or(())?,
         authorization,
@@ -331,8 +341,9 @@ impl App {
                 }
                 return self.db.create(user, &username, body, out);
             }
-            let s = &path[7..path.len() - 5];
-            let Some(id) = positive(s) else {
+            let Some(id) = path.strip_prefix("/posts/")
+                .and_then(|s| s.strip_suffix("/like"))
+                .and_then(positive) else {
                 return error(out, 400, "invalid post id");
             };
             return self.db.like(user, id, out);

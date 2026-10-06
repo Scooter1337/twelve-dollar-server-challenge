@@ -1,5 +1,5 @@
 //! Linux epoll, one thread, bounded buffers, and no executor/framework.
-use crate::{App, error, frame, number};
+use crate::{App, Parsed, error, frame, number};
 use std::{
     collections::VecDeque,
     io,
@@ -32,6 +32,7 @@ struct Client {
     ready: bool,
     touched: u64,
     epoch: u64,
+    continued: bool,
 }
 struct Pending {
     fd: usize,
@@ -39,10 +40,12 @@ struct Pending {
     end: usize,
     close: bool,
     count: usize,
+    interim: bool,
 }
 const MAX_FD: usize = 65536;
 const MAX_BUFFER: usize = 1_114_112;
 const IN: u32 = (libc::EPOLLIN | libc::EPOLLRDHUP) as u32;
+const CONTINUE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
 fn ctl(ep: i32, op: i32, fd: i32, flags: u32) -> io::Result<()> {
     let mut ev = libc::epoll_event {
         events: flags,
@@ -334,6 +337,7 @@ pub fn run(address: &str, mut app: App, options: Options) -> io::Result<()> {
             let mut closing = false;
             let begin = arena.len();
             let mut count = 0;
+            let mut interim = false;
             let mut deferred = false;
             if input.len() > MAX_BUFFER {
                 body.clear();
@@ -344,7 +348,8 @@ pub fn run(address: &str, mut app: App, options: Options) -> io::Result<()> {
             } else {
                 while offset < input.len() {
                     match frame(&input[offset..]) {
-                        Ok(Some(req)) => {
+                        Ok(Parsed::Complete(req)) => {
+                            clients[fd].continued = false;
                             body.clear();
                             let status = app.serve(&req, &mut body);
                             response(status, &body, req.close, &mut arena);
@@ -359,7 +364,14 @@ pub fn run(address: &str, mut app: App, options: Options) -> io::Result<()> {
                                 break;
                             }
                         }
-                        Ok(None) => break,
+                        Ok(Parsed::Incomplete { expect_continue }) => {
+                            if expect_continue && !clients[fd].continued {
+                                arena.extend_from_slice(CONTINUE);
+                                clients[fd].continued = true;
+                                interim = true;
+                            }
+                            break;
+                        }
                         Err(()) => {
                             body.clear();
                             error(&mut body, 400, "malformed request");
@@ -387,6 +399,7 @@ pub fn run(address: &str, mut app: App, options: Options) -> io::Result<()> {
                     end: arena.len(),
                     close: closing,
                     count,
+                    interim,
                 });
             }
         }
@@ -401,6 +414,9 @@ pub fn run(address: &str, mut app: App, options: Options) -> io::Result<()> {
                 p.start = arena.len();
                 for i in 0..p.count {
                     response(500, &body, p.close && i + 1 == p.count, &mut arena);
+                }
+                if p.interim {
+                    arena.extend_from_slice(CONTINUE);
                 }
                 p.end = arena.len();
             }
