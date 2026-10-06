@@ -4,6 +4,8 @@ The manifest pins 13 submission commits (#1–14) and the challenge snapshot. Ne
 
 Requires an ARM64 Docker host with four Docker CPUs, Python 3, git and network access. From this directory:
 
+The historical all-submission table uses Rust revision `7b8c351`. Use that revision's source with `--rust-source` to reproduce it; preparation defaults to the current source.
+
 ```bash
 python3 prepare_environment.py
 python3 compare_all.py
@@ -33,3 +35,16 @@ docker volume rm twelve-bench-data
 ```
 
 The comparison takes about 40 minutes after preparation, plus four minutes for the follow-up. Do not run simultaneous comparisons against the same host ports. `compare_all.py` uses a file lock to prevent overlap. Its `--builder`, `--image`, `--volume`, `--variants`, `--workloads` and `--out` options allow separate experiments.
+
+## Compare Rust revisions
+
+After preparing the builder/image, this script archives both commits, builds them as `bench`, then uses fresh seeds with the same one-CPU/2-GiB limits and monotonic wrk. Builds finish before measurements. It requires Python 3.12+ and a Git clone containing both commits:
+
+```bash
+python3 compare_revisions.py --base-ref fbdbe2b --candidate-ref 2f6000c \
+  --workloads mixed,create,like
+```
+
+Omit `--workloads` to include feed and single-post reads. The default is three 15-second trials with two-second warmups and 64 connections. Execution order alternates and workload order rotates. The creates workload sends real ASCII posts; likes target seed post 500000 with random seed users, so duplicate likes become common after warmup. Mixed is the same live-ID workload used above. Results contain raw output, official validation, source and binary hashes.
+
+[`optimization-results.json.gz`](optimization-results.json.gz) contains the 30-run allocation experiment, four-run insert probe and 18-run final confirmation, plus allocation and protocol/recovery/connection validation. The local runner source and source hashes are included. Its order is recorded per trial; the revision script provides the same workloads/resource limits with alternating order.

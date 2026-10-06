@@ -1,6 +1,6 @@
 # All-submission benchmark results
 
-Measured on 6 October 2026 on an Apple M1 Pro, using native Ubuntu 24.04 ARM64 in Docker Desktop. Every server stack had one CPU, 2 GiB RAM and no container swap; the load generator ran on separate CPUs. The table includes the 13 submission pull requests available when the manifest was recorded (#1–14) and this Rust implementation. Newer submissions #15–18 are not included. These are local throughput results, not official x86-64 DigitalOcean/k6 capacity scores.
+Measured on 6 October 2026 on an Apple M1 Pro, using native Ubuntu 24.04 ARM64 in Docker Desktop. Every server stack had one CPU, 2 GiB RAM and no container swap; the load generator ran on separate CPUs. The initial table uses Rust revision `7b8c351` and the 13 submission pull requests available when the manifest was recorded (#1–14). Newer submissions #15–18 are not included. Later Rust optimizations are measured separately below. These are local throughput results, not official x86-64 DigitalOcean/k6 capacity scores.
 
 ## Throughput
 
@@ -106,3 +106,25 @@ Raw measured/warmup output, validation output, source references, binary hashes,
 This establishes a ranking for the listed workloads at 64 connections on this ARM64 machine. It does not establish the official x86-64 score, performance with 15,000 active users, five-minute sustained capacity, or behaviour over a real network. The official load test has think time and different concurrency, so its ranking may differ. Three short trials provide limited evidence about variance and long-running write/checkpoint behaviour. Each implementation retains its own SQLite version and settings, so these results compare complete submissions rather than programming languages in isolation.
 
 See [bench/README.md](bench/README.md) for the method and reproduction commands. [bench/manifest.json](bench/manifest.json) pins every baseline commit.
+
+## Later allocation improvements
+
+Revision `fbdbe2b` fixes malformed like routes and `Expect: 100-continue` handling. Revision `2f6000c` adds reusable JWT buffers, borrowed username/body parsing, prepared transaction statements, and insert-plus-timestamp lookup in place of `INSERT ... RETURNING`. It preserves full JSON/Unicode validation and commit-before-response behavior.
+
+A thread-local Rust allocator counter around HTTP parsing, serving, commit and checkpoint work observed seven allocation/reallocation calls per ordinary create and four per like before the changes, and zero afterward. Each route was warmed twice and measured for 100 calls. Reads were already zero. SQLite's C allocator and socket I/O are outside this counter; escaped strings, chunked bodies, partial requests, backpressure and capacity growth can still allocate. The checked-in ignored allocation test asserts zero for ordinary warmed handlers.
+
+The first 30-run comparison of buffer/transaction changes measured median gains of 7.5% for creates, 5.2% for likes, 2.6% for feeds, 0.5% for post reads and 0.8% for mixed traffic. Paired read/mixed results changed direction and their ranges overlapped, so this does not establish a read/mixed improvement. A separate four-run probe found 6.7% more creates/s after removing the temporary `RETURNING` result table, with mixed traffic unchanged.
+
+The final three-trial confirmation compared the complete candidate directly against `fbdbe2b`, under the same one-CPU/2-GiB limits, 64 connections, fresh seeds, two-second warmups and 15-second measurements:
+
+| Workload | Before req/s | After req/s | Median gain | Before min–max | After min–max | Before / after median p99 ms |
+|---|---:|---:|---:|---:|---:|---:|
+| Creates | 57,680 | 61,238 | +6.2% | 56,789–60,228 | 53,860–63,136 | 6.790 / 8.303 |
+| Likes | 176,239 | 179,911 | +2.1% | 169,161–176,652 | 179,667–180,810 | 0.764 / 0.717 |
+| Mixed | 90,383 | 90,361 | −0.02% | 88,270–91,476 | 89,237–92,343 | 4.618 / 4.561 |
+
+Creates use real ASCII posts; likes target seed post 500000 with random seed users, so many likes are duplicates after warmup. Mixed uses live feed IDs. The create/mixed ranges overlap. One candidate create run had a **932.332 ms p99** spike and lower throughput; its other two p99s were 8.303 and 6.697 ms. The cause was not established. These results support modest write-throughput gains, not consistent tail-latency gains or an improved official capacity score.
+
+All 52 measured runs and warmups across the three stages reported zero errors. Both versions passed 42/42 official checks in the final batch. The final candidate separately passed 77 additional checks, SIGKILL recovery, 15,000 health-validated connections and 66-second reuse, the allocation assertion, and an x86-64 source/C-binding cross-check. Final idle RSS was 10.06 MiB.
+
+Raw runs, warmups, validation logs, runner source, source hashes and binary hashes are in [`bench/optimization-results.json.gz`](bench/optimization-results.json.gz). See [bench/README.md](bench/README.md) to reproduce the revision comparison. The original all-submission table remains evidence for the initial version; the final candidate was not rerun against every language submission.
