@@ -142,6 +142,35 @@ All request checks passed in both holds and both warmups. k6 summaries and thres
 
 Server limits: one CPU, 2 GiB without swap and 65,535 file descriptors. Client limits: two separate CPUs, 2,800 MiB without swap. HTTP used shared-host Linux loopback, with four loopback source addresses; no OS settings were changed. Both servers and clients stayed within their limits, with no OOMs. All builds finished before timing.
 
-This establishes **both revisions pass 2,500 users locally**. There was one hold per revision; it does not establish a speedup, maximum capacity, or the official x86-64 DigitalOcean score. No doubling/binary search for the user limit was performed. The official score still requires its separate load-generator machine and server.
+This establishes **both revisions pass 2,500 users locally**. There was one hold per revision; it does not establish a speedup, maximum capacity, or the official x86-64 DigitalOcean score. That revision comparison did not search for the user limit; a later search follows below. The official score still requires its separate load-generator machine and server.
 
 Raw k6 summaries/logs, sampled server/client resource counters, source/binary identities, script checksum, preparation and runner source are in [`bench/official-k6-results.json.gz`](bench/official-k6-results.json.gz).
+
+## Official workload capacity search
+
+Application revision `230b2f8` was unchanged throughout the search. The unmodified official script and k6 2.3.0 retain the 60-second ramp, five-minute hold, 30-second ramp-down, think times, probabilities and thresholds. Each search kept the same server/database running after the 1,000-user/two-minute warmup. Percentiles and failure rates are the full-run k6 summaries, including ramps and graceful stopping.
+
+The **M1/Docker ARM64 server passed 40,000 users**, with zero failures and p95/p99 **154.26/470.04 ms**. The 80,000-user probe was invalid: the Chisel transport was OOM-killed in the 4-GiB Docker VM; Rust remained running without OOM events. A separate 40,000-user repeat was also invalid because the aggregate SSH relay disconnected. These establish a local lower bound, not an M1 capacity ceiling. The transport bypassed Docker published-port forwarding and used 1-KiB buffers and eight loopback origin addresses; its exact patch and identities are included with the evidence.
+
+To remove that transport, the same source was built as an unprivileged user and tested on **native Ubuntu 24.04 x86-64 / Xeon E5-2690 v3**, with Docker host networking. Rust 1.94.0 and GCC 12.2 came from the pinned `rust:1.94.0-bookworm` image. The server had **one CPU, 2 GiB without swap, and 65,535 descriptors**. k6 ran on separate physical cores of that same 64-GiB host, with eight loopback source addresses. This is a different server machine from the M1 comparison and uses same-host loopback, not the official separate-client DigitalOcean setup. No kernel settings or unrelated processes were changed. All builds finished before measurements, and the native server passed **42/42 official API checks** on its fresh seed before warmup.
+
+The search started at the observed 40,000-user lower bound, doubled to a failing 80,000-user probe, then bisected to **250-user resolution** and repeated the highest pass for another five-minute hold:
+
+| Users | Phase | p95 ms | p99 ms | Failed requests | Result |
+|---:|---|---:|---:|---:|---|
+| 40,000 | Search | 0.995 | 21.148 | 0.000% | Pass |
+| 80,000 | Search | 2.317 | 22.250 | 4.699% | Fail |
+| 60,000 | Search | 5.565 | 24.508 | 0.000% | Pass |
+| 70,000 | Search | 2.324 | 21.403 | 1.421% | Fail |
+| 65,000 | Search | 9.058 | 26.913 | 0.000% | Pass |
+| 67,500 | Search | 2.604 | 22.239 | 0.552% | Pass |
+| 68,750 | Search | 2.694 | 22.015 | 0.988% | Pass |
+| 69,250 | Search | 2.761 | 22.216 | 1.165% | Fail |
+| 69,000 | Search | 2.563 | 22.090 | 1.077% | Fail |
+| 68,750 | Confirmation | 2.610 | 22.365 | 0.990% | Pass |
+
+The confirmed benchmark boundary is **68,750 passing / 69,000 failing**. Both 68,750-user holds passed, at **0.988% and 0.990% failures**—very close to the permitted 1%. **65,000 users had zero failures**; that is the highest zero-failure count tested, not a separate search for an exact zero-failure maximum. This is a measured threshold boundary rather than a guarantee across machines or future runs. Requests/s is think-time paced, not maximum throughput, and no C++ capacity comparison was performed.
+
+Above the connection limit, sampled descriptors reached **65,535** and k6 logged feed request timeouts; latency thresholds still passed. The application remained running throughout, with zero cgroup OOM events and a **340.27 MiB peak**. The host retained at least **31.71 GiB of available memory** during the generator samples. The current connection table is also bounded at 65,536 entries. These results identify the descriptor/connection cap as the constraint in this configuration; they do not establish the CPU or memory ceiling after lifting it.
+
+Raw summaries/logs, resource samples, validation, source/binary/script/image hashes, transport patch and exact runner/preparation scripts are in [`bench/official-k6-capacity-results.json.gz`](bench/official-k6-capacity-results.json.gz). Invalid transport attempts are explicitly marked and excluded from the native bracket.

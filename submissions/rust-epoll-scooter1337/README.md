@@ -81,4 +81,6 @@ SQLITE_PATH="$allocation_fixture/feed.db" \
 rm -rf "$allocation_fixture"
 ```
 
-The unmodified official `bench/load.js` also passes locally at 2,500 users for a full five-minute hold, after the 1,000-user/two-minute warmup. Both the earlier and current versions pass with zero failed requests/checks. This is a tested local user count, not a maximum-capacity search or official score; see [BENCHMARKS.md](BENCHMARKS.md) for the k6 summaries.
+The unmodified official `bench/load.js` also passes locally at 2,500 users for a full five-minute hold, after the 1,000-user/two-minute warmup. Both the earlier and current versions pass with zero failed requests/checks. That revision comparison tested a fixed count; the later capacity search is described below.
+
+A subsequent search with unmodified `bench/load.js` passed **65,000 users with zero failed requests** and confirmed **68,750 users** under the official thresholds on native x86-64 Linux, with one CPU and 2 GiB for the server. Confirmation p95/p99: **2.61/22.36 ms**, failed requests **0.990%**. The next 250-user step, 69,000, failed at 1.077%. The 65,535-descriptor limit constrained connections; this is a loopback result on a Xeon E5-2690 v3, not the official droplet score. The M1 server separately passed 40,000 users; its higher/repeat probes encountered transport failures. See [BENCHMARKS.md](BENCHMARKS.md) for all probes and limitations.

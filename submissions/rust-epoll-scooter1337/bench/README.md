@@ -66,4 +66,12 @@ k6 run --quiet --summary-export hold.json \
 
 The recorded comparison runs server containers with one CPU and 2 GiB without swap, client containers on two separate CPUs with 2,800 MiB without swap, and 65,535 file descriptors. It adds `--local-ips 127.0.0.2,127.0.0.3,127.0.0.4,127.0.0.5` for this shared-host loopback setup. Builds finish first; both warmup and hold retain the script's default 60-second ramp-up and 30-second ramp-down. Full-run k6 summaries include those ramps and graceful stopping.
 
-[`official-k6-results.json.gz`](official-k6-results.json.gz) contains both revisions' summaries, logs, source/script/binary hashes, sampled resource counters and the exact preparation/runner source. This tests 2,500 users locally; it does not search for maximum users or establish the official x86-64 droplet score.
+[`official-k6-results.json.gz`](official-k6-results.json.gz) contains both revisions' summaries, logs, source/script/binary hashes, sampled resource counters and the exact preparation/runner source. That revision comparison tests a fixed 2,500-user count; it does not establish the official droplet score.
+
+## Capacity search
+
+[`official-k6-capacity-results.json.gz`](official-k6-capacity-results.json.gz) records a later search on unchanged application revision `230b2f8`. It includes the valid M1 lower-bound runs, invalid transport probes, and the completed native x86-64 search. See [BENCHMARKS.md](../BENCHMARKS.md) for the hardware distinction, all probes and the 68,750/69,000-user boundary.
+
+Use the same official script and thresholds. After fresh-seed API validation and the 1,000-user/two-minute warmup, retain the server/database, probe a starting count, and double until a valid server failure. Bisect the passing/failing bracket in 250-user steps, giving every probe a five-minute hold. Repeat the highest pass for another full hold; step down by 250 if confirmation fails. Abort on generator, transport or host resource failures instead of treating them as server capacity.
+
+The archived native `prepare.sh` and `run.py` contain the exact commands, unprivileged build, resource limits, CPU assignments, eight `--local-ips` addresses and infrastructure checks. Adapt the host paths and available CPU numbers when reproducing. Native tests use one server CPU and 2 GiB without swap; the generator excludes that CPU and its SMT sibling. No builds run during timing. The official separate-client droplet test is still required for an official score.
