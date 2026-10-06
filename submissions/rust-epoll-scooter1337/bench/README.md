@@ -48,3 +48,22 @@ python3 compare_revisions.py --base-ref fbdbe2b --candidate-ref 2f6000c \
 Omit `--workloads` to include feed and single-post reads. The default is three 15-second trials with two-second warmups and 64 connections. Execution order alternates and workload order rotates. The creates workload sends real ASCII posts; likes target seed post 500000 with random seed users, so duplicate likes become common after warmup. Mixed is the same live-ID workload used above. Results contain raw output, official validation, source and binary hashes.
 
 [`optimization-results.json.gz`](optimization-results.json.gz) contains the 30-run allocation experiment, four-run insert probe and 18-run final confirmation, plus allocation and protocol/recovery/connection validation. The local runner source and source hashes are included. Its order is recorded per trial; the revision script provides the same workloads/resource limits with alternating order.
+
+## Official k6 workload
+
+The local comparison also runs the challenge root's `bench/load.js` unchanged. Use checksum-verified k6 2.3.0 and a fresh seed for each revision. Run the golden API checks before the warmup; their expected rows no longer match once load-test writes have changed the database. Keep the same server and database running between warmup and hold.
+
+From the challenge root, with the server already running at the URL shown:
+
+```bash
+k6 run --quiet --summary-export warmup.json \
+  -e BASE_URL=http://127.0.0.1:3000 -e VUS=1000 -e DURATION=2m \
+  -e TOKENS="$(pwd)/seed/tokens.json" bench/load.js
+k6 run --quiet --summary-export hold.json \
+  -e BASE_URL=http://127.0.0.1:3000 -e VUS=2500 -e DURATION=5m \
+  -e TOKENS="$(pwd)/seed/tokens.json" bench/load.js
+```
+
+The recorded comparison runs server containers with one CPU and 2 GiB without swap, client containers on two separate CPUs with 2,800 MiB without swap, and 65,535 file descriptors. It adds `--local-ips 127.0.0.2,127.0.0.3,127.0.0.4,127.0.0.5` for this shared-host loopback setup. Builds finish first; both warmup and hold retain the script's default 60-second ramp-up and 30-second ramp-down. Full-run k6 summaries include those ramps and graceful stopping.
+
+[`official-k6-results.json.gz`](official-k6-results.json.gz) contains both revisions' summaries, logs, source/script/binary hashes, sampled resource counters and the exact preparation/runner source. This tests 2,500 users locally; it does not search for maximum users or establish the official x86-64 droplet score.

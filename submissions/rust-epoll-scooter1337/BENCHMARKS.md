@@ -128,3 +128,20 @@ Creates use real ASCII posts; likes target seed post 500000 with random seed use
 All 52 measured runs and warmups across the three stages reported zero errors. Both versions passed 42/42 official checks in the final batch. The final candidate separately passed 77 additional checks, SIGKILL recovery, 15,000 health-validated connections and 66-second reuse, the allocation assertion, and an x86-64 source/C-binding cross-check. Final idle RSS was 10.06 MiB.
 
 Raw runs, warmups, validation logs, runner source, source hashes and binary hashes are in [`bench/optimization-results.json.gz`](bench/optimization-results.json.gz). See [bench/README.md](bench/README.md) to reproduce the revision comparison. The original all-submission table remains evidence for the initial version; the final candidate was not rerun against every language submission.
+
+## Official JavaScript workload locally
+
+Ran the repository's **unmodified `bench/load.js`** with checksum-verified k6 2.3.0 ARM64. Each revision started from a fresh seed, passed 42/42 API checks, completed the prescribed 1,000-user/two-minute warmup, then kept the same server/database for a **2,500-user/five-minute hold**. Both runs used the script's default 60-second ramp-up and 30-second ramp-down, original think times, write probabilities and thresholds.
+
+| Revision | Users held | p95 ms | p99 ms | Failed requests | Requests | Average req/s | Result |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Before allocations (`fbdbe2b`) | 2,500 | 2.827 | 7.949 | 0% | 93,366 | 233.4 | Pass |
+| Current (`b79f11f`) | 2,500 | 2.456 | 7.736 | 0% | 93,546 | 233.9 | Pass |
+
+All request checks passed in both holds and both warmups. k6 summaries and threshold decisions include ramp-up/down and graceful stopping; these percentiles are the full-run summaries, not separately filtered steady-hold measurements. Requests/s is workload-paced by think time and is not maximum throughput.
+
+Server limits: one CPU, 2 GiB without swap and 65,535 file descriptors. Client limits: two separate CPUs, 2,800 MiB without swap. HTTP used shared-host Linux loopback, with four loopback source addresses; no OS settings were changed. Both servers and clients stayed within their limits, with no OOMs. All builds finished before timing.
+
+This establishes **both revisions pass 2,500 users locally**. There was one hold per revision; it does not establish a speedup, maximum capacity, or the official x86-64 DigitalOcean score. No doubling/binary search for the user limit was performed. The official score still requires its separate load-generator machine and server.
+
+Raw k6 summaries/logs, sampled server/client resource counters, source/binary identities, script checksum, preparation and runner source are in [`bench/official-k6-results.json.gz`](bench/official-k6-results.json.gz).

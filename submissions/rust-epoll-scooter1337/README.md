@@ -80,3 +80,5 @@ SQLITE_PATH="$allocation_fixture/feed.db" \
   cargo test --release --locked -- --ignored --nocapture
 rm -rf "$allocation_fixture"
 ```
+
+The unmodified official `bench/load.js` also passes locally at 2,500 users for a full five-minute hold, after the 1,000-user/two-minute warmup. Both the earlier and current versions pass with zero failed requests/checks. This is a tested local user count, not a maximum-capacity search or official score; see [BENCHMARKS.md](BENCHMARKS.md) for the k6 summaries.
