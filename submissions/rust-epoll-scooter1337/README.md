@@ -48,7 +48,7 @@ Passed all 42 official checks, a fresh Ubuntu installation/build as an unprivile
 
 Validated 15,000 simultaneous idle connections and reused 200 original sockets after 66 seconds. Process RSS was 10.04 MiB at that idle connection count. This is separate from throughput testing and excludes kernel socket memory. The source also cross-compiles for x86-64; x86-64 execution has not been measured.
 
-Across the local comparison of all 13 existing submissions, Rust had the highest feed, post and mixed medians. Against C++/epoll v2 #9:
+Across the local comparison of 13 pinned submissions (#1–14), Rust had the highest feed, post and mixed medians. Newer submissions #15–18 are not included. Against C++/epoll v2 #9:
 
 | Requests/s | C++ #9 | Rust | Gain |
 |---|---:|---:|---:|

@@ -1,6 +1,6 @@
 # All-submission benchmark results
 
-Measured on 6 October 2026 on an Apple M1 Pro, using native Ubuntu 24.04 ARM64 in Docker Desktop. Every server stack had one CPU, 2 GiB RAM and no container swap; the load generator ran on separate CPUs. The table includes all 13 submitted pull requests and this Rust implementation. These are local throughput results, not official x86-64 DigitalOcean/k6 capacity scores.
+Measured on 6 October 2026 on an Apple M1 Pro, using native Ubuntu 24.04 ARM64 in Docker Desktop. Every server stack had one CPU, 2 GiB RAM and no container swap; the load generator ran on separate CPUs. The table includes the 13 submission pull requests available when the manifest was recorded (#1–14) and this Rust implementation. Newer submissions #15–18 are not included. These are local throughput results, not official x86-64 DigitalOcean/k6 capacity scores.
 
 ## Throughput
 

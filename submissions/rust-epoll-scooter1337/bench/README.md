@@ -1,6 +1,6 @@
 # Reproduce the local comparison
 
-The manifest pins all 13 submission commits and the challenge snapshot. The application sources and build flags are preserved. Preparation shares pinned Ruby and Erlang runtimes across submissions and selects the official checksum-pinned ARM64 Bun 1.4.2 asset in place of the installers' x86-64 asset.
+The manifest pins 13 submission commits (#1–14) and the challenge snapshot. Newer submissions #15–18 are not included. The application sources and build flags are preserved. Preparation shares pinned Ruby and Erlang runtimes across submissions and selects the official checksum-pinned ARM64 Bun 1.4.2 asset in place of the installers' x86-64 asset.
 
 Requires an ARM64 Docker host with four Docker CPUs, Python 3, git and network access. From this directory:
 
