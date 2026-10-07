@@ -174,3 +174,61 @@ The confirmed benchmark boundary is **68,750 passing / 69,000 failing**. Both 68
 Above the connection limit, sampled descriptors reached **65,535** and k6 logged feed request timeouts; latency thresholds still passed. The application remained running throughout, with zero cgroup OOM events and a **340.27 MiB peak**. The host retained at least **31.71 GiB of available memory** during the generator samples. The current connection table is also bounded at 65,536 entries. These results identify the descriptor/connection cap as the constraint in this configuration; they do not establish the CPU or memory ceiling after lifting it.
 
 Raw summaries/logs, resource samples, validation, source/binary/script/image hashes, transport patch and exact runner/preparation scripts are in [`bench/official-k6-capacity-results.json.gz`](bench/official-k6-capacity-results.json.gz). Invalid transport attempts are explicitly marked and excluded from the native bracket.
+
+## Raised descriptor capacity
+
+On 7 October 2026, the native x86-64 search was repeated with the `f631fff` source plus the descriptor patch: startup raises only its own soft `RLIMIT_NOFILE` within the inherited hard limit, the ceiling is 1,048,576, and the table grows from at most 4,096 slots. The server inherited soft/hard limits of 1,024/1,048,576 and raised the soft limit to 1,048,576. This is an experimental source snapshot, **not the submitted implementation**. Its descriptor patch was not retained because later throughput comparisons did not satisfy the no-regression requirement. The inherited own-thread affinity is also removed from the submitted source under rule 11.
+
+The same Xeon host, server CPU 23, one CPU quota and 2-GiB/no-swap budget were used. The unchanged official k6 script retained its warmup, 60-second ramp, five-minute holds, 30-second ramp-down and thresholds. The database evolved throughout the search. k6 used other physical cores, 16 loopback source addresses, a 48-GiB/no-swap cap, `GOGC=50` and `GOMEMLIMIT=44GiB`. Full-run summaries include ramps and graceful stopping.
+
+| Users | Phase | p95 ms | p99 ms | Failed requests | Result |
+|---:|---|---:|---:|---:|---|
+| 80,000 | Search | 13.920 | 29.254 | 0.000% | Pass |
+| 160,000 | Search | 77.974 | 144.986 | 0.000% | Pass |
+| 320,000 | Search | — | — | — | Invalid: generator OOM |
+| 240,000 | Search | 2815.266 | 7874.595 | 0.000% | Fail |
+| 200,000 | Search | 904.743 | 1265.599 | 0.841% | Fail |
+| 180,000 | Search | 309.901 | 493.640 | 0.263% | Pass |
+| 190,000 | Search | 443.542 | 797.583 | 0.067% | Pass |
+| 195,000 | Search | 701.024 | 943.854 | 0.298% | Fail |
+| 192,500 | Search | 746.573 | 1011.801 | 0.204% | Fail |
+| 191,250 | Search | 673.511 | 989.233 | 0.180% | Fail |
+| 190,500 | Search | 521.521 | 785.108 | 0.170% | Fail |
+| 190,250 | Search | 594.836 | 804.894 | 0.183% | Fail |
+| 190,000 | Confirmation | 606.657 | 1059.917 | 0.192% | Fail |
+| 189,750 | Confirmation | 629.993 | 1190.784 | 0.282% | Fail |
+| 189,500 | Confirmation | 462.805 | 675.953 | 0.120% | Pass |
+
+The confirmation pass was **189,500 users**, with p95/p99 **462.805/675.953 ms** and **0.120% failures**. The 189,750 confirmation failed. Although 190,000 passed during search, it failed confirmation; the apparent 250-user boundary is sensitive to variation. The highest zero-failure count tested was **160,000**, not an exact zero-failure maximum. This is 2.76 times the old descriptor-constrained confirmation count, not a requests/s speedup or an official droplet score. No C++ capacity comparison was run.
+
+**The generator constrains this result.** The 320,000-user attempt was OOM-killed by its client memory cap and is excluded. At high counts k6 approaches its 44-GiB Go memory limit and consumes many CPU cores. Server throughput fell between 160,000 and 240,000 users while sampled server CPU usage also fell; the app remained healthy. Tiny independent read probes often stayed fast, but cannot establish write tail latency. These observations do not isolate Rust's CPU ceiling. Subsequent CPU/heap profiles inspect this pressure separately.
+
+The server stayed within its 2-GiB budget without OOMs; its lifetime cgroup memory peak was **1,162.64 MiB**, including file cache and kernel socket memory. This is different from process RSS. Builds ran as UID 1000 before timing. The native version passed 42/42 official checks, 77 additional checks, SIGKILL recovery, and 80,000 simultaneous health-validated connections with one-second reuse. The earlier 66-second reuse result belongs to the ARM64 validation. No kernel settings changed.
+
+Raw summaries, logs, resource counters, validation, source/binary/script hashes, exact runner scripts and independent probes are in [`bench/official-k6-raised-descriptors-results.json.gz`](bench/official-k6-raised-descriptors-results.json.gz).
+
+## Memory and scoring follow-up (7 October 2026)
+
+The experimental candidate removes application CPU affinity, initializes descriptor storage only as needed, and uses 64-byte function alignment on x86-64. **This candidate was rejected after its longer mixed confirmation regressed.** The submitted follow-up only removes CPU affinity to comply with rule 11. SQL, data, indexes, durability, per-request authentication and dependencies are unchanged. Compared with published revision `f631fff`, each workload below used three alternating 30-second trials, 64 connections, a fresh seed and two seconds of warmup. Server: one CPU, 2 GiB, no swap; client: separate CPUs. These comparisons rerun our prior version, not every submission.
+
+| Workload | ARM64 published → candidate req/s | Change | Xeon published → candidate req/s | Change |
+|---|---:|---:|---:|---:|
+| Feed | 54,265 → 58,865 | +8.48% | 27,320 → 27,753 | +1.58% |
+| Post | 234,098 → 253,953 | +8.48% | 95,252 → 96,955 | +1.79% |
+| Mixed | 75,997 → 77,854 | +2.44% | 31,749 → 31,651 | -0.31% |
+| Create | 51,782 → 54,758 | +5.75% | 9,157 → 9,321 | +1.79% |
+| Like | 154,054 → 164,668 | +6.89% | 72,187 → 73,384 | +1.66% |
+
+Trial ranges and raw paired observations are included in `bench/score-profile-results.json.gz`. ARM64 mixed ranges were 73,230–84,173 versus 69,908–84,796 req/s; Xeon mixed ranges were 26,229–31,769 versus 26,387–33,291. Run-to-run variation prevents a literal guarantee of never losing one request/s. The longer five-pair, 45-second mixed confirmation measured **27,364.93 → 26,909.97 req/s (−1.66%)**. Published range: 26,631.68–33,742.12; candidate range: 26,173.19–29,578.65. This rejected the candidate despite the earlier gains. No final-source capacity confirmation was run for it.
+
+Mixed median process RSS fell from 46.809 to 44.266 MiB on ARM64 and 36.742 to 31.961 MiB on Xeon. Anonymous memory fell from 9.520 to 6.516 MiB and 7.672 to 2.738 MiB respectively. Native cgroup memory fell from 21.512 to 16.762 MiB, but seed copies outside that cgroup can charge file cache to the host. These figures exclude whole-host memory and cannot be substituted for droplet measurements.
+
+Issue #7's unofficial table uses 40% mixed throughput, 20% physical application lines, 20% resolved production dependencies and 20% RSS. The rejected candidate would reduce application lines from 1,357 to 1,309, projecting approximately 76.2 versus 75.5 while holding the issue's M2 throughput/RSS figures fixed. **That candidate is not submitted.** The minimal rules fix has 1,329 lines, giving a code-only projection of approximately **75.9**, with dependencies unchanged at 25 including SQLite. Neither projection is a measured table score or ranking. The official challenge score remains the five-minute k6 capacity threshold. The table author must rerun submitted source on their machine.
+
+[Profiling details](bench/PROFILING.md) include hardware-counter limits, flamegraph findings, generator GC pressure and rejected optimizations.
+
+### Retained rules-only patch
+
+After rejecting the memory candidate, a minimal patch removed affinity without changing handler/SQLite code, connection storage or compiler flags. A separate three-pair 30-second Xeon comparison passed 42/42 official checks for both builds and had no warmup or measurement errors. Feed median: **27,322.14 → 27,623.92 req/s (+1.10%)**; ranges 26,958.52–27,794.99 versus 27,443.94–27,772.49. Mixed median: **28,939.06 → 32,321.19 req/s (+11.69%)**; ranges 28,278.65–29,550.92 versus 26,867.77–33,870.42. Mixed variation is substantial, including one slower candidate run; these measurements do not prove a causal 11.69% gain or guarantee every run improves. Only feed/mixed were remeasured for this minimal patch.
+
+No memory reduction is claimed for the retained patch: mixed RSS medians were 36.434 versus 36.883 MiB, anonymous memory 7.668 versus 7.660 MiB. Source/binary identities, raw observations and validation are in the evidence archive. Its native validation passes 82 additional checks, SIGKILL recovery and 15,000 simultaneous health-checked connections with 66-second original-socket reuse. The lower-memory candidate's 80,000-connection result does not describe this retained 65,536-slot implementation.

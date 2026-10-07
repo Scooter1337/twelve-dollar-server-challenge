@@ -10,14 +10,12 @@ use std::{
 
 pub struct Options {
     pub group: bool,
-    pub pin: bool,
     pub spin_us: u64,
 }
 impl Default for Options {
     fn default() -> Self {
         Self {
             group: true,
-            pin: true,
             spin_us: 0,
         }
     }
@@ -137,31 +135,7 @@ fn response(status: u16, body: &[u8], close: bool, out: &mut Vec<u8>) {
     });
     out.extend_from_slice(body);
 }
-fn own_affinity(pin: bool) {
-    if !pin {
-        return;
-    }
-    // Change only our own thread, never the OS or another process. On the actual
-    // single-vCPU droplet this is a no-op. Respect the inherited allowed CPU set.
-    unsafe {
-        let mut allowed: libc::cpu_set_t = std::mem::zeroed();
-        if libc::sched_getaffinity(0, std::mem::size_of_val(&allowed), &mut allowed) != 0 {
-            return;
-        }
-        let current = libc::sched_getcpu();
-        if current < 0 || !libc::CPU_ISSET(current as usize, &allowed) {
-            return;
-        }
-        let mut selected: libc::cpu_set_t = std::mem::zeroed();
-        libc::CPU_ZERO(&mut selected);
-        libc::CPU_SET(current as usize, &mut selected);
-        if libc::sched_setaffinity(0, std::mem::size_of_val(&selected), &selected) == 0 {
-            eprintln!("own event loop affinity: CPU {current}");
-        }
-    }
-}
 pub fn run(address: &str, mut app: App, options: Options) -> io::Result<()> {
-    own_affinity(options.pin);
     let address: SocketAddr = address
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;

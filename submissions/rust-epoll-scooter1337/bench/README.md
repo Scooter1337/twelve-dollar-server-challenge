@@ -75,3 +75,17 @@ The recorded comparison runs server containers with one CPU and 2 GiB without sw
 Use the same official script and thresholds. After fresh-seed API validation and the 1,000-user/two-minute warmup, retain the server/database, probe a starting count, and double until a valid server failure. Bisect the passing/failing bracket in 250-user steps, giving every probe a five-minute hold. Repeat the highest pass for another full hold; step down by 250 if confirmation fails. Abort on generator, transport or host resource failures instead of treating them as server capacity.
 
 The archived native `prepare.sh` and `run.py` contain the exact commands, unprivileged build, resource limits, CPU assignments, eight `--local-ips` addresses and infrastructure checks. Adapt the host paths and available CPU numbers when reproducing. Native tests use one server CPU and 2 GiB without swap; the generator excludes that CPU and its SMT sibling. No builds run during timing. The official separate-client droplet test is still required for an official score.
+
+## Raised descriptor capacity
+
+[`official-k6-raised-descriptors-results.json.gz`](official-k6-raised-descriptors-results.json.gz) contains an experimental native x86-64 search after increasing the table ceiling to 1,048,576 and raising only the server process's soft descriptor limit within its inherited hard limit. The table starts with at most 4,096 slots and grows on demand. The server container inherited soft/hard limits of 1,024/1,048,576; `/proc/1/limits` confirmed both became 1,048,576.
+
+The archived `prepare.sh`, `run.py` and `probe.py` record exact commands. The server uses CPU 23, one CPU of quota, 2 GiB without swap, and host networking. The k6 client excludes CPU 23 and its physical sibling 11, uses 16 loopback source addresses, a 48-GiB memory cap without swap, `GOGC=50` and `GOMEMLIMIT=44GiB`. No host kernel settings changed. Adapt paths and CPU assignments to the reproduction host. Native builds run as UID 1000, and all builds and correctness checks finish before timing.
+
+The unmodified official script retains its ramp, think times, probabilities and thresholds. Warmup is 1,000 users for two minutes, and every search/confirmation hold lasts five minutes with the same evolving database. A 320,000-user generator OOM is explicitly excluded. Search thereafter distinguishes generator feasibility from valid threshold failures. Small independent read probes add 30 sequential GET requests when invoked; they diagnose latency but do not establish write latency or an application capacity ceiling. See [BENCHMARKS.md](../BENCHMARKS.md) for all rows and interpretation of generator pressure.
+
+This raised-descriptor patch is not shipped: subsequent paired throughput measurements rejected it. Its 189,500-user confirmation is historical experimental evidence, not the current submission's capacity.
+
+## CPU/memory experiments
+
+`score-profile-results.json.gz` includes all candidate measurements, rejected/incomplete batch markings, the longer mixed confirmation, source/build identities, validation logs, runner source, hardware-counter reports and folded stacks. See [PROFILING.md](PROFILING.md). The submitted follow-up removes CPU affinity only; the lower-memory/function-alignment candidate is rejected.

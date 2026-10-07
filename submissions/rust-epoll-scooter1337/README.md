@@ -25,7 +25,7 @@ bash test/run.sh submissions/rust-epoll-scooter1337
 - **Rust 1.94.0**, edition 2024, release optimization, native CPU instructions, fat LTO and one codegen unit. Runtime/build dependencies are pinned in `Cargo.toml` and `Cargo.lock`.
 - **SQLite 3.53.4**, SHA256-verified official amalgamation, statically compiled with GCC at `-O3`. Raw C bindings, one `NOMUTEX` connection and ten prepared statements. Transaction statements are prepared once. Creates use an insert and a live timestamp lookup to avoid SQLite's temporary `RETURNING` result table. No Rust database wrapper.
 - **Direct Linux epoll and sockets** through `libc`. `httparse` parses HTTP, `serde_json` validates request JSON, `hmac`/`sha2` verify HS256 signatures, and `itoa` serializes integers. SIMD JSON escaping uses SSE2 on x86-64 and NEON on ARM64. Explicit bounds protect vector loads.
-- **One thread** avoids queues, executor dispatch and synchronization between HTTP and SQLite. Only the server's own thread is pinned to a permitted CPU. No kernel settings or other processes are changed.
+- **One thread** avoids queues, executor dispatch and synchronization between HTTP and SQLite. The server does not set CPU affinity or change kernel settings (rule 11).
 - **Group commit** collects writes within an event-loop batch. Every generated response waits for a successful commit; failures roll back and replace the tentative responses with errors. There is no time-based batching delay.
 - **WAL with `synchronous=NORMAL`**, foreign keys, exclusive locking, a 500-page cache and a 1 GiB mmap limit. A WAL hook schedules restart checkpoints at 1,000 frames after responses. The schema and indexes are unchanged.
 - **SQLite PGO** instruments the C object, trains it against a disposable file database, then recompiles it using the profile. The trainer is not linked into the server and uses no challenge seed data. Clang and cross-compilation fall back to ordinary optimization. Disable profiling with `bash build.sh --no-default-features`.
@@ -40,14 +40,13 @@ Busy polling is optional. Local tests found no meaningful throughput benefit, so
 target/release/twelve-rust-poll --spin-us=50
 target/release/twelve-rust-poll --spin-us=200
 target/release/twelve-rust-poll --no-group
-target/release/twelve-rust-poll --no-pin
 ```
 
 ## Validation and results
 
-Passed all 42 official checks and 77 additional checks covering auth, Unicode, borrowed JSON/JWT parsing, fragmented/chunked HTTP, `100 Continue`, malformed like routes/framing, duplicate concurrent likes, 1,800 pipelined responses with backpressure, and reads following writes. Acknowledged writes survived `SIGKILL` and restart. Builds run as an unprivileged user; the initial installation was also tested on fresh Ubuntu.
+Passed all 42 official checks and 82 additional checks covering auth, Unicode, borrowed JSON/JWT parsing, fragmented/chunked HTTP, `100 Continue`, malformed like routes/framing, duplicate concurrent likes, 1,800 pipelined responses with backpressure, and reads following writes. Acknowledged writes survived `SIGKILL` and restart. Builds run as an unprivileged user; the initial installation was also tested on fresh Ubuntu.
 
-Validated 15,000 simultaneous idle connections and reused 200 original sockets after 66 seconds. Process RSS was 10.06 MiB at that idle connection count. This is separate from throughput testing and excludes kernel socket memory. The source and SQLite bindings also cross-check for x86-64; x86-64 execution has not been measured.
+Validated 15,000 simultaneous idle connections and reused 200 original sockets after 66 seconds. Process RSS was 10.06 MiB at that idle connection count. This is separate from throughput testing and excludes kernel socket memory. Native x86-64 builds also pass the official checks and have measured throughput, capacity and profiling results documented below.
 
 The initial version (`7b8c351`) had the highest feed, post and mixed medians in the local comparison of 13 pinned submissions (#1–14). Newer submissions #15–18 are not included. Against C++/epoll v2 #9:
 
@@ -84,3 +83,5 @@ rm -rf "$allocation_fixture"
 The unmodified official `bench/load.js` also passes locally at 2,500 users for a full five-minute hold, after the 1,000-user/two-minute warmup. Both the earlier and current versions pass with zero failed requests/checks. That revision comparison tested a fixed count; the later capacity search is described below.
 
 A subsequent search with unmodified `bench/load.js` passed **65,000 users with zero failed requests** and confirmed **68,750 users** under the official thresholds on native x86-64 Linux, with one CPU and 2 GiB for the server. Confirmation p95/p99: **2.61/22.36 ms**, failed requests **0.990%**. The next 250-user step, 69,000, failed at 1.077%. The 65,535-descriptor limit constrained connections; this is a loopback result on a Xeon E5-2690 v3, not the official droplet score. The M1 server separately passed 40,000 users; its higher/repeat probes encountered transport failures. See [BENCHMARKS.md](BENCHMARKS.md) for all probes and limitations.
+
+The 7 October memory/profile experiments are documented in [BENCHMARKS.md](BENCHMARKS.md) and [profiling notes](bench/PROFILING.md). A lower-memory descriptor table reduced Xeon mixed RSS by 13.0%, but its longer mixed-throughput confirmation regressed 1.66%, so it was rejected. The submitted change removes CPU affinity and preserves the previous connection layout and compiler options. Dependency count remains 25 including SQLite.

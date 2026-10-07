@@ -104,6 +104,10 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
    replies=list(pool.map(lambda _:req('POST',f'/posts/{pid}/like',None,auth()),range(16)))
   check(sum(r[0]==201 for r in replies)==1 and sum(r[0]==200 for r in replies)==15,'16 duplicate likes serialized')
   check(req('GET',f'/posts/{pid}')[1]['post']['like_count']==1,'fresh count after concurrent likes')
+  check(req('POST','/posts/999999999/like',None,auth())==(404,{'error':'post not found'}),'missing like post after FK check')
+  check(req('POST',f'/posts/{pid}/like',None,auth(sub='999999999'))==(500,{'error':'internal server error'}),'missing like user preserves foreign keys')
+  check(req('POST','/posts/999999999/like',None,auth(sub='999999999'))==(404,{'error':'post not found'}),'missing post and user preserves 404')
+  check(req('GET',f'/posts/{pid}')[1]['post']['like_count']==1,'failed likes leave live count unchanged')
   # Fragmented requests and chunked JSON, with trailers and chunk extensions.
   s=sock();raw=(f'POST /posts HTTP/1.1\r\nHost: x\r\nAuthorization: {auth()}\r\nContent-Length: 16\r\n\r\n'+ '{"body":"split"}').encode()
   for offset in range(0,len(raw),7):s.sendall(raw[offset:offset+7])
@@ -145,15 +149,22 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
   server.kill();server.wait();start()
   recovered=req('GET',f'/posts/{pid}')
   check(recovered[0]==200 and recovered[1]['post']['body']=='durable before reply' and recovered[1]['post']['like_count']==1,'SIGKILL recovery of acknowledged post/like')
+  connection_start=time.monotonic()
   for i in range(a.connections):
    # Distribute loopback source addresses so TIME_WAIT sockets from preceding
    # benchmark trials cannot exhaust a single local ephemeral port range.
    s=sock('127.0.0.'+str(2+i%4));s.sendall(b'GET /health HTTP/1.1\r\nHost: x\r\n\r\n')
    assert wire(s)[0][0]==200;sockets.append(s)
   check(len(sockets)==a.connections,f'{a.connections} simultaneous health-validated keep-alive sockets')
+  check(len(os.listdir(f'/proc/{server.pid}/fd'))>=a.connections,'server retains all connection descriptors')
+  print('CONNECTION SETUP SECONDS',time.monotonic()-connection_start,flush=True)
   with open(f'/proc/{server.pid}/status') as f:
    print('CONNECTION MEMORY',*[line.strip() for line in f if line.startswith(('VmRSS:','VmHWM:','RssAnon:','RssFile:'))],flush=True)
   if a.idle_seconds:
+   # Setup can be long at high connection counts. Measure idle time from a
+   # fresh request on these original sockets, rather than from their creation.
+   for s in sockets[:200]:
+    s.sendall(b'GET /health HTTP/1.1\r\nHost: x\r\n\r\n');assert wire(s)[0][0]==200
    print('waiting',a.idle_seconds,'seconds to validate original sockets',flush=True)
    time.sleep(a.idle_seconds)
    for s in sockets[:200]:
@@ -161,6 +172,12 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
    check(True,f'200 original sockets reused after {a.idle_seconds}s without reconnecting')
   print('PASSED',checks,'additional checks',flush=True)
  finally:
+  for name in ['memory.current','memory.peak','memory.events']:
+   path='/sys/fs/cgroup/'+name
+   if os.path.isfile(path):
+    with open(path) as f:print('TEST CGROUP',name,f.read().strip(),flush=True)
+  if server and server.poll() is not None:
+   print('SERVER EXIT',server.returncode,flush=True)
   for s in sockets:s.close()
   if server and server.poll() is None:server.kill();server.wait()
   log.close()

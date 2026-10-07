@@ -447,8 +447,6 @@ fn main() {
     for arg in std::env::args().skip(1) {
         if arg == "--no-group" {
             options.group = false;
-        } else if arg == "--no-pin" {
-            options.pin = false;
         } else if let Some(v) = arg.strip_prefix("--spin-us=") {
             options.spin_us = v.parse().expect("spin microseconds");
         } else {
