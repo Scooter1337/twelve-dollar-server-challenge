@@ -2,14 +2,15 @@
 """Black-box protocol, auth, live-read, crash-recovery and connection tests.
 Run on Linux: python3 tests/check.py --seed /path/feed.db --server target/release/twelve-rust-poll
 """
-import argparse,base64,concurrent.futures,hashlib,hmac,http.client,json,os,resource,select,shutil,socket,subprocess,tempfile,time
+import argparse,base64,concurrent.futures,hashlib,hmac,http.client,json,os,resource,select,shutil,socket,struct,subprocess,tempfile,time
 p=argparse.ArgumentParser()
 p.add_argument('--seed',required=True);p.add_argument('--server',required=True)
 p.add_argument('--connections',type=int,default=15000)
 p.add_argument('--idle-seconds',type=int,default=66)
+p.add_argument('--server-nofile',type=int,help='set only the server child soft/hard descriptor limit')
 a=p.parse_args()
 if resource.getrlimit(resource.RLIMIT_NOFILE)[0] < a.connections+64:
- p.error('raise the file-descriptor limit before running: ulimit -n 65535 (the challenge service limit)')
+ p.error('raise the client file-descriptor limit above --connections + 64')
 secret='twelve-dollar-challenge';port=3001;checks=0
 def check(ok,label):
  global checks
@@ -47,14 +48,27 @@ def wire(s,count=1):
   data=f.read(length);assert len(data)==length
   out.append((status,json.loads(data)))
  f.close();return out
+def connection_handles(pid):
+ handles=len(os.listdir(f'/proc/{pid}/fd'))
+ for info in os.listdir(f'/proc/{pid}/fdinfo'):
+  with open(f'/proc/{pid}/fdinfo/{info}') as f:lines=f.read().splitlines()
+  registered=False
+  for line in lines:
+   if line.startswith('UserFiles:'):registered=True;continue
+   if line.startswith('UserBufs:'):registered=False
+   if registered and ':' in line and line.split(':',1)[0].strip().isdigit() and '<none>' not in line:handles+=1
+ return handles
 with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
  db=d+'/feed.db';shutil.copyfile(a.seed,db)
  env=dict(os.environ,SQLITE_PATH=db,JWT_SECRET=secret,HOST='127.0.0.1',PORT=str(port))
  log=open(d+'/server.log','w')
  server=None;sockets=[]
+ def server_limits():
+  if a.server_nofile is not None:
+   resource.setrlimit(resource.RLIMIT_NOFILE,(a.server_nofile,a.server_nofile))
  def start():
   global server
-  server=subprocess.Popen([os.path.abspath(a.server)],env=env,stdout=log,stderr=log)
+  server=subprocess.Popen([os.path.abspath(a.server)],env=env,stdout=log,stderr=log,preexec_fn=server_limits)
   for _ in range(100):
    try:
     if req('GET','/health')[0]==200:return
@@ -139,6 +153,23 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
   s.sendall(raw);time.sleep(.2)
   replies=wire(s,1800)
   check(all(status==200 and len(data['posts'])==20 for status,data in replies),'1800 pipelined responses/backpressure');s.close()
+  # Cancel receives and interrupt sends while pipelines are backpressured. Closed
+  # clients must release their registered slots before those slots are reused.
+  before=connection_handles(server.pid)
+  for batch in range(4):
+   reset=[]
+   for i in range(16):
+    s=sock();s.setsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF,4096)
+    s.sendall(raw);reset.append(s)
+   time.sleep(.05)
+   for s in reset:
+    s.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,struct.pack('ii',1,0));s.close()
+  for attempt in range(20):
+   after=connection_handles(server.pid)
+   if after<=before+8:break
+   time.sleep(.25)
+  check(after<=before+8,'reset backpressured pipelines release connection handles')
+  check(req('GET','/health')[0]==200,'healthy after repeated slot reuse')
   # A write followed by a read in the same pipeline must see the new data.
   s=sock();raw=(f'POST /posts HTTP/1.1\r\nHost: x\r\nAuthorization: {auth()}\r\nContent-Length: 21\r\n\r\n{{"body":"pipeline-x"}}GET /feed HTTP/1.1\r\nHost: x\r\n\r\n').encode()
   s.sendall(raw);r=wire(s,2)
@@ -156,7 +187,14 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
    s=sock('127.0.0.'+str(2+i%4));s.sendall(b'GET /health HTTP/1.1\r\nHost: x\r\n\r\n')
    assert wire(s)[0][0]==200;sockets.append(s)
   check(len(sockets)==a.connections,f'{a.connections} simultaneous health-validated keep-alive sockets')
-  check(len(os.listdir(f'/proc/{server.pid}/fd'))>=a.connections,'server retains all connection descriptors')
+  # io_uring direct descriptors are in the ring's registered tables, not /fd.
+  # fdinfo lists occupied entries when it can acquire the ring's lock.
+  handles=0
+  for attempt in range(20):
+   handles=connection_handles(server.pid)
+   if handles>=a.connections:break
+   time.sleep(.05)
+  check(handles>=a.connections,'server retains all connection handles')
   print('CONNECTION SETUP SECONDS',time.monotonic()-connection_start,flush=True)
   with open(f'/proc/{server.pid}/status') as f:
    print('CONNECTION MEMORY',*[line.strip() for line in f if line.startswith(('VmRSS:','VmHWM:','RssAnon:','RssFile:'))],flush=True)
@@ -171,6 +209,10 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
     s.sendall(b'GET /health HTTP/1.1\r\nHost: x\r\n\r\n');assert wire(s)[0][0]==200
    check(True,f'200 original sockets reused after {a.idle_seconds}s without reconnecting')
   print('PASSED',checks,'additional checks',flush=True)
+ except:
+  log.flush()
+  with open(log.name) as f:print('SERVER LOG',f.read(),flush=True)
+  raise
  finally:
   for name in ['memory.current','memory.peak','memory.events']:
    path='/sys/fs/cgroup/'+name

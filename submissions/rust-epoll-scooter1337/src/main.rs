@@ -1,5 +1,6 @@
 mod db;
 mod net;
+mod uring;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
@@ -389,6 +390,10 @@ struct App {
     auth: Auth,
     start: Instant,
 }
+// This binary owns one SQLite connection. The io_uring workers hold the same
+// Mutex<App> for the entire query/commit batch, so SQLite and Auth are never
+// entered concurrently. Moving ownership between issuers preserves NOMUTEX.
+unsafe impl Send for App {}
 impl App {
     fn serve(&mut self, frame: &Frame<'_>, out: &mut Vec<u8>) -> u16 {
         let path = frame.path.split('?').next().unwrap_or(frame.path);
@@ -444,8 +449,18 @@ impl App {
 }
 fn main() {
     let mut options = net::Options::default();
+    let mut epoll = false;
+    let mut tuning = uring::Tuning::default();
     for arg in std::env::args().skip(1) {
-        if arg == "--no-group" {
+        if arg == "--epoll" {
+            epoll = true;
+        } else if let Some(v) = arg.strip_prefix("--uring-batch=") {
+            tuning.batch = v.parse().expect("completion batch size");
+            assert!((1..=1024).contains(&tuning.batch));
+        } else if let Some(v) = arg.strip_prefix("--uring-wait-us=") {
+            tuning.wait_us = v.parse().expect("completion wait microseconds");
+            assert!(tuning.wait_us <= 10000);
+        } else if arg == "--no-group" {
             options.group = false;
         } else if let Some(v) = arg.strip_prefix("--spin-us=") {
             options.spin_us = v.parse().expect("spin microseconds");
@@ -453,6 +468,7 @@ fn main() {
             panic!("unknown option: {arg}");
         }
     }
+    assert!(epoll || options.spin_us == 0, "--spin-us requires --epoll");
     let path = std::env::var("SQLITE_PATH").expect("SQLITE_PATH required");
     let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET required");
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
@@ -462,7 +478,11 @@ fn main() {
         auth: Auth::new(&secret),
         start: Instant::now(),
     };
-    net::run(&format!("{host}:{port}"), app, options).expect("HTTP server");
+    if epoll {
+        net::run(&format!("{host}:{port}"), app, options).expect("epoll server");
+    } else {
+        uring::run(&format!("{host}:{port}"), app, tuning).expect("io_uring server");
+    }
 }
 
 #[cfg(test)]

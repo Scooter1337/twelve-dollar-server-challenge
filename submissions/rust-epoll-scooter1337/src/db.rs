@@ -1,4 +1,4 @@
-//! SQLite owns all persisted data. This module confines the raw C pointers to one thread.
+//! SQLite owns all persisted data. Calls stay under one serialized connection owner.
 use std::{
     cell::Cell,
     ffi::{CString, c_char, c_int, c_void},
@@ -114,6 +114,10 @@ impl Drop for Stmt {
 }
 pub struct Db {
     feed: Stmt,
+    feed_ids: Stmt,
+    feed_likes: Stmt,
+    feed_rows: Stmt,
+    feed_scratch: Vec<u8>,
     post: Stmt,
     health: Stmt,
     insert: Stmt,
@@ -187,6 +191,19 @@ impl Db {
                 raw,
                 &format!("{select} ORDER BY p.created_at DESC,p.id DESC LIMIT 20"),
             ),
+            feed_ids: prepare(
+                raw,
+                "SELECT id FROM posts ORDER BY created_at DESC,id DESC LIMIT 20",
+            ),
+            feed_likes: prepare(
+                raw,
+                "SELECT post_id FROM likes WHERE post_id BETWEEN ?1 AND ?2",
+            ),
+            feed_rows: prepare(
+                raw,
+                "SELECT p.id,p.body,p.created_at,u.username FROM posts p JOIN users u ON u.id=p.user_id WHERE p.id BETWEEN ?1 AND ?2",
+            ),
+            feed_scratch: Vec::with_capacity(16384),
             post: prepare(raw, &format!("{select} WHERE p.id=?1")),
             health: prepare(raw, "SELECT 1"),
             insert: prepare(raw, "INSERT INTO posts(user_id,body) VALUES(?1,?2)"),
@@ -256,6 +273,11 @@ impl Db {
         }
     }
     pub fn read(&mut self, id: Option<i64>, out: &mut Vec<u8>) -> u16 {
+        if id.is_none() {
+            if let Some(status) = self.range_feed(out) {
+                return status;
+            }
+        }
         let stmt = if let Some(id) = id {
             self.post.bind_int(1, id);
             &mut self.post
@@ -286,6 +308,87 @@ impl Db {
         }
         out.extend_from_slice(if id.is_some() { b"}" } else { b"]}" });
         200
+    }
+    // Discover the current feed IDs on every request. A small live ID range can
+    // be read with three scans rather than twenty separate table/count lookups.
+    // Sparse IDs take the original query; neither path assumes seeded values.
+    fn range_feed(&mut self, out: &mut Vec<u8>) -> Option<u16> {
+        let mut ids = [0i64; 20];
+        let mut n = 0;
+        let mut rc = self.feed_ids.step();
+        while rc == ROW && n < ids.len() {
+            ids[n] = self.feed_ids.int(0);
+            n += 1;
+            rc = self.feed_ids.step();
+        }
+        self.feed_ids.reset();
+        if rc != DONE {
+            return Some(crate::error(out, 500, "internal server error"));
+        }
+        if n == 0 {
+            out.extend_from_slice(b"{\"posts\":[]}");
+            return Some(200);
+        }
+        let minimum = *ids[..n].iter().min().unwrap();
+        let maximum = *ids[..n].iter().max().unwrap();
+        if maximum.checked_sub(minimum)? >= 256 {
+            return None;
+        }
+        let mut slots = [-1i8; 256];
+        for i in 0..n {
+            slots[(ids[i] - minimum) as usize] = i as i8;
+        }
+        let mut likes = [0u64; 20];
+        self.feed_likes.bind_int(1, minimum);
+        self.feed_likes.bind_int(2, maximum);
+        let mut rc = self.feed_likes.step();
+        while rc == ROW {
+            let slot = slots[(self.feed_likes.int(0) - minimum) as usize];
+            if slot >= 0 {
+                likes[slot as usize] += 1;
+            }
+            rc = self.feed_likes.step();
+        }
+        self.feed_likes.reset();
+        if rc != DONE {
+            return Some(crate::error(out, 500, "internal server error"));
+        }
+        let mut segments = [(0usize, 0usize); 20];
+        let mut found = 0;
+        self.feed_scratch.clear();
+        self.feed_rows.bind_int(1, minimum);
+        self.feed_rows.bind_int(2, maximum);
+        let mut rc = self.feed_rows.step();
+        while rc == ROW {
+            let slot = slots[(self.feed_rows.int(0) - minimum) as usize];
+            if slot >= 0 {
+                let start = self.feed_scratch.len();
+                append_post_with_likes(
+                    &self.feed_rows,
+                    likes[slot as usize],
+                    &mut self.feed_scratch,
+                );
+                segments[slot as usize] = (start, self.feed_scratch.len());
+                found += 1;
+            }
+            rc = self.feed_rows.step();
+        }
+        self.feed_rows.reset();
+        if rc != DONE {
+            return Some(crate::error(out, 500, "internal server error"));
+        }
+        if found != n {
+            return None;
+        }
+        out.extend_from_slice(b"{\"posts\":[");
+        for (i, &(start, end)) in segments[..n].iter().enumerate() {
+            if i != 0 {
+                out.push(b',');
+            }
+            out.extend_from_slice(&self.feed_scratch[start..end]);
+        }
+        out.extend_from_slice(b"]}");
+        Some(200)
     }
     pub fn health(&mut self, seconds: u64, out: &mut Vec<u8>) -> u16 {
         let ok = self.health.step() == ROW;
@@ -388,6 +491,9 @@ impl Drop for Db {
         // is safe, so null each pointer to prevent a second finalization.
         for s in [
             &mut self.feed,
+            &mut self.feed_ids,
+            &mut self.feed_likes,
+            &mut self.feed_rows,
             &mut self.post,
             &mut self.health,
             &mut self.insert,
@@ -409,6 +515,9 @@ impl Drop for Db {
     }
 }
 fn append_post(stmt: &Stmt, out: &mut Vec<u8>) {
+    append_post_with_likes(stmt, stmt.int(4) as u64, out);
+}
+fn append_post_with_likes(stmt: &Stmt, likes: u64, out: &mut Vec<u8>) {
     out.extend_from_slice(b"{\"id\":");
     crate::number(stmt.int(0) as u64, out);
     out.extend_from_slice(b",\"body\":");
@@ -418,6 +527,6 @@ fn append_post(stmt: &Stmt, out: &mut Vec<u8>) {
     out.extend_from_slice(b",\"author\":");
     crate::json_string(stmt.text(3), out);
     out.extend_from_slice(b",\"like_count\":");
-    crate::number(stmt.int(4) as u64, out);
+    crate::number(likes, out);
     out.push(b'}');
 }

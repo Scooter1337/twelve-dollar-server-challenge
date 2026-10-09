@@ -1,5 +1,7 @@
 # CPU and memory profiling
 
+The io_uring follow-up and differential SQLite profiles are documented in [IO_URING.md](../IO_URING.md). The measurements below describe an earlier epoll revision.
+
 Measured on 7 October 2026 on the native Xeon E5-2690 v3 host. The application was revision `f631fff`, rebuilt with debug symbols, native instructions and the normal SQLite PGO training. Profiling is diagnostic; these runs are excluded from throughput comparisons and capacity scores.
 
 Each workload used a fresh seed, 64 connections, one server CPU with a 2-GiB/no-swap limit, and two separate client CPUs. After warmup, `perf record -F 199 --call-graph dwarf,8192` sampled 20 seconds of a 25-second load. A separate load collected 20 seconds of hardware counters. No kernel settings were changed. CPU sets were test-harness resource isolation; the submitted server does not set affinity.
@@ -34,7 +36,7 @@ RSS, anonymous memory and total cgroup memory are distinct. SQLite mmap pages co
 
 The rejected candidate descriptor table reserves fixed address space but initializes only the used prefix, in 1,024-slot blocks. It preserves the full connection layout and never moves active entries. In its three-trial mixed comparison, Xeon median RSS fell from 36.742 to 31.961 MiB and anonymous memory from 7.672 to 2.738 MiB. ARM64 RSS fell from 46.809 to 44.266 MiB and anonymous memory from 9.520 to 6.516 MiB. These are process measurements, not total droplet memory. Native seed copies were made outside the server cgroup, which can charge file-cache pages to the host; native cgroup totals must not be interpreted as whole-host physical usage or compared directly to Docker Desktop totals.
 
-The longer five-pair mixed confirmation regressed 1.66% (27,364.93 to 26,909.97 req/s), so this memory reduction and function alignment are not submitted. Crypto replacement, dependency removal, smaller connection layouts and alternate SQLite cache settings were also tested and rejected for throughput regressions. Production dependencies remain 25 resolved packages including SQLite.
+The longer five-pair mixed confirmation regressed 1.66% (27,364.93 to 26,909.97 req/s), so this memory reduction and function alignment were not submitted. Crypto replacement, dependency removal, smaller connection layouts and alternate SQLite cache settings were also tested and rejected for throughput regressions. That epoll revision retained 25 resolved packages including SQLite.
 
 ## Evidence and reproduction
 

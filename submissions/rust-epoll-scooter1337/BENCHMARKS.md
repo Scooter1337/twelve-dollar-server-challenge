@@ -1,5 +1,7 @@
 # All-submission benchmark results
 
+For the 9 October io_uring revision and native x86-64 comparisons, see [IO_URING.md](IO_URING.md). The results below describe earlier epoll revisions.
+
 Measured on 6 October 2026 on an Apple M1 Pro, using native Ubuntu 24.04 ARM64 in Docker Desktop. Every server stack had one CPU, 2 GiB RAM and no container swap; the load generator ran on separate CPUs. The initial table uses Rust revision `7b8c351` and the 13 submission pull requests available when the manifest was recorded (#1–14). Newer submissions #15–18 are not included. Later Rust optimizations are measured separately below. These are local throughput results, not official x86-64 DigitalOcean/k6 capacity scores.
 
 ## Throughput
