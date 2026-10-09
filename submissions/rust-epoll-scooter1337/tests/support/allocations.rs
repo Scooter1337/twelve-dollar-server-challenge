@@ -36,6 +36,7 @@ mod allocation_check {
     #[test]
     #[ignore = "requires a disposable seeded SQLITE_PATH and CHECK_TOKEN"]
     fn warmed_requests() {
+        let _fixture = SEEDED_TEST.lock().unwrap();
         let mut app = App {
             db: db::Db::open(&std::env::var("SQLITE_PATH").unwrap(), true),
             auth: Auth::new("twelve-dollar-challenge"),

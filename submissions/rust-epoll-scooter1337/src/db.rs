@@ -213,7 +213,7 @@ impl Db {
                 "INSERT INTO likes(user_id,post_id) SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM posts WHERE id=?2) ON CONFLICT(user_id,post_id) DO NOTHING",
             ),
             exists: prepare(raw, "SELECT 1 FROM posts WHERE id=?1"),
-            begin_stmt: prepare(raw, "BEGIN IMMEDIATE"),
+            begin_stmt: prepare(raw, "BEGIN"),
             commit_stmt: prepare(raw, "COMMIT"),
             rollback_stmt: prepare(raw, "ROLLBACK"),
             raw,
@@ -273,6 +273,10 @@ impl Db {
         }
     }
     pub fn read(&mut self, id: Option<i64>, out: &mut Vec<u8>) -> u16 {
+        // Read and write requests share the completion batch's deferred transaction.
+        if !self.begin() {
+            return crate::error(out, 500, "internal server error");
+        }
         if id.is_none() {
             if let Some(status) = self.range_feed(out) {
                 return status;

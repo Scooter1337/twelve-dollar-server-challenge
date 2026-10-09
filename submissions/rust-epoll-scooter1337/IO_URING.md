@@ -1,5 +1,7 @@
 # io_uring follow-up
 
+These measurements describe revision `b58c862`, before the subsequent read-transaction and fdatasync changes described in [README.md](README.md).
+
 The submitted server uses Linux io_uring directly. Accepted sockets go into each ring's registered file table, rather than the process file table. This is the same Linux mechanism used by [C #26](https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/26); it is not a replacement for Linux descriptors. Registration is bounded by the inherited hard limit for each ring, while occupied slots do not consume ordinary process descriptors.
 
 With the repository's soft/hard limit of 65,535, Rust creates eight rings of 65,535 slots. With a 1,048,576 limit it creates one ring of 524,280 slots. The latter reduces worker coordination and ring resources while retaining the same aggregate table capacity. These are table capacities, not a promise that all those users fit in the CPU/memory budget.

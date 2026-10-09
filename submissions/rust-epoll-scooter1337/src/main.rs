@@ -487,3 +487,5 @@ fn main() {
 
 #[cfg(test)]
 include!("../tests/support/allocations.rs");
+#[cfg(test)]
+include!("../tests/support/snapshots.rs");

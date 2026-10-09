@@ -16,6 +16,10 @@ fn main() {
         .define("SQLITE_OMIT_PROGRESS_CALLBACK", None)
         .define("SQLITE_LIKE_DOESNT_MATCH_BLOBS", None)
         .define("SQLITE_USE_ALLOCA", None);
+    // SQLite's Linux VFS supports fdatasync with the same WAL/NORMAL guarantees.
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux" {
+        build.define("HAVE_FDATASYNC", "1");
+    }
     let compiler=build.get_compiler();
     if native && compiler.is_like_gnu() && !compiler.is_like_clang() && std::env::var_os("CARGO_FEATURE_SQLITE_PGO").is_some() {
         use std::{path::PathBuf,process::Command};
