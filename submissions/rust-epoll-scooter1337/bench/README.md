@@ -89,3 +89,7 @@ This raised-descriptor patch is not shipped: subsequent paired throughput measur
 ## CPU/memory experiments
 
 `score-profile-results.json.gz` includes all candidate measurements, rejected/incomplete batch markings, the longer mixed confirmation, source/build identities, validation logs, runner source, hardware-counter reports and folded stacks. See [PROFILING.md](PROFILING.md). The submitted follow-up removes CPU affinity only; the lower-memory/function-alignment candidate is rejected.
+
+## Mixed tuning experiments
+
+[`mixed-tuning-results.json.gz`](mixed-tuning-results.json.gz) contains the later batching, SQL, SQLite compiler, whole-process allocator, inlining and LTO experiments. The `files` object retains original evidence text keyed by relative path, with a SHA-256/size manifest. It also includes verified-download metadata and cleanup logs. See [MIXED_TUNING.md](../MIXED_TUNING.md) for methods and rejected candidates. No performance change was retained.
