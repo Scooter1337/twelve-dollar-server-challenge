@@ -23,7 +23,7 @@ start.sh runs in the foreground using only the four environment variables in SPE
 - One 64-byte connection record. Partial inputs allocate on demand. Output allocations remain fixed until the last send completion, then return to a bounded pool. Idle connections retain no response buffers. Generations reject stale completions after slot reuse; backpressure pauses reads until output drains.
 - Every feed first discovers the newest 20 IDs. If their span is under 256, live range scans fetch rows and like counts, then restore timestamp/ID order. Sparse IDs use the original query. No seed-specific IDs, cached results or changed indexes.
 - Live reads share a deferred SQLite transaction through each serialized completion batch. Writes upgrade it as needed, avoiding repeated pager setup while keeping every query live. Grouped responses wait for successful commit; failed batches replace tentative replies with errors.
-- WAL, synchronous=NORMAL, foreign keys, stock unix-excl VFS, a 500-page SQLite cache and a 1 GiB mmap limit. Linux builds enable SQLite’s fdatasync path. A background PASSIVE checkpoint is requested every 4,096 additional WAL frames. At 65,536 frames, io_uring keeps serving reads while deferring writes for up to 500 ms to let checkpointing catch up. This is a soft drain threshold: after timeout, writes resume and the threshold advances; it is not a hard WAL size limit. Every successful write response still waits for its commit.
+- WAL, synchronous=NORMAL, foreign keys, stock unix-excl VFS, a 500-page SQLite cache and a 1 GiB mmap limit. Retained WAL size is limited to 16 MiB on reset; this does not cap an active WAL. Linux builds enable SQLite’s fdatasync path. A background PASSIVE checkpoint is requested every 4,096 additional WAL frames. At 65,536 frames, io_uring keeps serving reads while deferring writes for up to 500 ms to let checkpointing catch up. This is a soft drain threshold: after timeout, writes resume and the threshold advances; it is not a hard WAL size limit. Every successful write response still waits for its commit.
 - SQLite PGO trains on a disposable synthetic file database at build time. It uses no challenge seed data and is not linked into the server. Disable it with bash build.sh --no-default-features.
 - httparse, the LUFP JSON parser, hmac/sha2 and itoa handle HTTP parsing, full JSON validation, individual HS256 verification and integer formatting. serde_json is used only by tests. Ordinary fields borrow their input; JWT decode and response buffers are reused. Checked SSE2/NEON loads handle JSON escaping.
 
@@ -33,23 +33,42 @@ Unsafe code covers C bindings, Linux I/O, vector loads and compact owning buffer
 
 ## Validation and measurements
 
-The submitted runtime/build/test files match the measured candidate. It passes all 42 official checks, six additional live-data checks, six ordinary Rust tests and four seeded tests covering warmed Rust allocations, read-to-write transaction upgrades, checkpoint/reopen persistence after 3,000 writes, and commit-failure rollback/response ordering. The allocation counter excludes SQLite's C allocator and socket I/O; partial inputs, escaped strings and buffer growth may allocate.
+The runtime passes all 42 official checks, 98 protocol/recovery checks (including 15,000 connections at hard LimitNOFILE=65535), six feed-range checks, six additional live-data checks, six ordinary Rust tests and seven seeded Rust tests. Regressions cover SQLite automatic rollback, terminal receive cleanup, deferred half-closed requests, commit-before-response ordering and checkpoint/reopen persistence. The allocation counter excludes SQLite's C allocator and socket I/O; partial inputs, escaped strings and buffer growth may allocate.
 
-Native x86 MEGASERVER, shared host, one server CPU quota, 2 GiB/no swap, direct HTTP and 1,000,000 descriptors for every server. No CPU affinity or kernel tuning. The descriptor limit differs from the specification's 65,535, so these measurements are supplemental comparisons, not an official capacity score. Baselines are Rust #82 at `95aa405a0003599dbc7fb4dfa47a09e8343239df` and Zig #125 at `c02250f01d457a2698167eba35234ddef87d25b7`.
+Measurements below use native x86 MEGASERVER, a shared host, one server CPU quota, 2 GiB/no swap, direct HTTP and 1,000,000 descriptors for every server. No CPU affinity or kernel tuning. The descriptor limit differs from the specification's 65,535, and the host OS has resources outside the server cgroup, so these are supplemental comparisons, not an official droplet capacity score. Zig #125 is frozen at `c02250f01d457a2698167eba35234ddef87d25b7`.
 
-Two 60-second mixed wrk trials each, fresh database, two-second warmup, 64 connections and two client threads in a separate 2 CPU/2 GiB load container:
+Unchanged `bench/load.js`, 1,000-user/two-minute warmup, 60-second ramp and 100,000-user/five-minute hold:
+
+| Implementation | p95 ms | p99 ms | Failed requests |
+|---|---:|---:|---:|
+| Published version (`bad1638`) | 139.33 | 405.54 | 0 |
+| This version | 117.11 | 357.78 | 0 |
+| Zig #125 | 94.19 | 267.61 | 0 |
+
+All three runs exit 0 and pass post-shutdown database integrity checks. Think times keep them near 9.3k req/s. The load container has 12 CPUs/32 GiB and multiple loopback source IPs. An earlier review-fix-only run failed p99 at 1.30 s despite zero failed requests; its repeat passed. The retained-WAL change is included in the current run above. Shared-host tail variability remains, and these runs do not establish either implementation's maximum.
+
+Four alternating 60-second mixed wrk trials, Zig/Rust/Rust/Zig, use fresh databases, a two-second warmup, 64 connections and a separate 2 CPU/2 GiB load container:
 
 | Implementation | Trial 1 req/s | Trial 2 req/s | Median req/s |
 |---|---:|---:|---:|
-| Rust #82 | 11,961.93 | 12,058.16 | 12,010.05 |
-| Zig #125 | 19,502.78 | 18,710.42 | 19,106.60 |
-| This version | 23,684.21 | 24,165.55 | 23,924.88 |
+| Zig #125 | 20,609.08 | 20,214.85 | 20,411.97 |
+| This version | 27,055.30 | 25,865.00 | 26,460.15 |
 
-Median throughput improves 25.2% over Zig and 99.2% over Rust #82. This version and Zig report zero HTTP/socket errors or timeouts; Rust #82 reports 232 and 192 wrk timeouts. These are sustained throughput tests, not maximum-user searches. The LUFP parser is already in #82 and is not credited as a new gain.
+Median mixed throughput is 29.6% higher. All four runs report zero HTTP/socket errors or timeouts, and committed post counts increase after shutdown. Full integrity scans are reserved for the longer validation runs below.
 
-Both this version and Zig pass unchanged `bench/load.js`: 1,000 users for a two-minute warmup, a 60-second ramp to 100,000 users and a five-minute hold. Both k6 runs exit 0 with zero failed requests/checks. Rust records p95 99.39 ms and p99 329.30 ms; Zig records 134.89 ms and 348.63 ms. Think times keep both near 9.3k req/s. The separate load container uses 12 CPUs/32 GiB and multiple loopback source IPs. Both server cgroups reach the 2 GiB budget without OOM; this is not a total-memory reduction claim.
+The C generator from [#26](https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/26), with [#137](https://github.com/arjaythedev/twelve-dollar-server-challenge/pull/137)'s connection-close fixes and additional timeout/unfinished-request diagnostics, permits higher-user comparisons without k6's memory footprint. It preserves browsing probabilities and think times, but uses histogram percentiles, a fixed-date post body and no ramp-down; its results are separate from the unchanged JavaScript benchmark.
 
-Both controllers exceed their 30-second shutdown timeout after exporting those completed benchmark results, so post-hold persistence/integrity output was not collected. Separate shutdown persistence/integrity checks and the seeded checkpoint/reopen test pass. This is a common passing point on MEGASERVER, not either server's maximum or the official droplet score.
+With a full two-minute/1,000-user warmup, 60-second ramp and five-minute C-generator hold at 275,000 users:
+
+| Implementation | Hold p95 ms | Hold p99 ms | Counted failures | Outcome |
+|---|---:|---:|---:|---|
+| Review fixes, 256 MiB retained WAL | 565.87 | 2,104.44 | 0.086% | Fails latency |
+| This version, 16 MiB retained WAL | 330.64 | 644.01 | 0.059% | Passes |
+| Zig #125 | — | — | — | Server OOM |
+
+Both Rust runs finish with all 275,000 connections open, zero request/connect timeouts and passing post-shutdown integrity checks. Their counted failures are unfinished requests at the generator's cutoff. Zig's server cgroup records one OOM kill; its generator records none, and post-shutdown integrity is unavailable. Zig also caps its fiber pool at 262,144 slots under the higher descriptor limit. A five-minute 300,000-user probe fails (hold p95 554.72 ms, p99 1,924.17 ms, 0.146% counted failures). 275,000 is the highest passing point tested, not an exact maximum.
+
+The load container has 8 CPUs/8 GiB; this version's C generator peaks at 1.49 GiB. Server memory still reaches its 2 GiB budget; there is no total-RAM reduction claim. Four alternating mixed wrk trials comparing the 256/16 MiB settings yield medians of 26,327/26,287 req/s (−0.15%, within 0.5%). Individual runs vary substantially, so this is no claim of a precise throughput gain.
 
 From the repository root:
 

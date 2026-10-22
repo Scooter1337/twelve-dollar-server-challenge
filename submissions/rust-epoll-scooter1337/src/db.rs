@@ -20,6 +20,7 @@ unsafe extern "C" {
         vfs: *const c_char,
     ) -> c_int;
     fn sqlite3_close(db: *mut Connection) -> c_int;
+    fn sqlite3_get_autocommit(db: *mut Connection) -> c_int;
     fn sqlite3_errmsg(db: *mut Connection) -> *const c_char;
     fn sqlite3_exec(
         db: *mut Connection,
@@ -315,7 +316,7 @@ impl Db {
         }
         exec(
             raw,
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA mmap_size=1073741824; PRAGMA cache_size=500; PRAGMA temp_store=MEMORY; PRAGMA journal_size_limit=268435456; PRAGMA wal_autocheckpoint=0; SELECT count(*) FROM sqlite_schema;",
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA mmap_size=1073741824; PRAGMA cache_size=500; PRAGMA temp_store=MEMORY; PRAGMA journal_size_limit=16777216; PRAGMA wal_autocheckpoint=0; SELECT count(*) FROM sqlite_schema;",
         );
         fn prepare(raw: *mut Connection, sql: &str) -> Stmt {
             let sql = CString::new(sql).unwrap();
@@ -378,8 +379,14 @@ impl Db {
         ok
     }
     fn begin(&mut self) -> bool {
-        if !self.group || self.transaction {
+        if !self.group {
             return true;
+        }
+        if self.transaction {
+            // FULL/IOERR/NOMEM may roll back a transaction inside sqlite3_step.
+            // Keep the batch active so commit fails and tentative replies are
+            // replaced, but never let later requests escape into autocommit.
+            return unsafe { sqlite3_get_autocommit(self.raw) == 0 };
         }
         if !Self::transaction_step(&mut self.begin_stmt) {
             return false;
@@ -422,6 +429,10 @@ impl Db {
     }
     pub fn draining(&self) -> bool {
         self.checkpointer.drain.is_some()
+    }
+    #[cfg(test)]
+    pub(crate) fn pause_writes_for_test(&mut self, paused: bool) {
+        self.checkpointer.drain = paused.then(|| (u64::MAX, Instant::now() + Duration::from_millis(500)));
     }
     pub fn read(&mut self, id: Option<i64>, out: &mut Vec<u8>) -> u16 {
         // Read and write requests share the completion batch's deferred transaction.
@@ -686,3 +697,7 @@ fn append_post_with_likes(stmt: &Stmt, likes: u64, out: &mut Vec<u8>) {
     crate::number(likes, out);
     out.push(b'}');
 }
+
+#[cfg(test)]
+#[path = "../tests/support/transactions.rs"]
+mod transaction_tests;

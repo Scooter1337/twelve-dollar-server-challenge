@@ -158,6 +158,13 @@ with tempfile.TemporaryDirectory(prefix='twelve-tests-') as d:
   s.sendall(raw);time.sleep(.2)
   replies=wire(s,1800)
   check(all(status==200 and len(data['posts'])==20 for status,data in replies),'1800 pipelined responses/backpressure');s.close()
+  # Half-close after more requests than one parser batch can serve. EOF must
+  # preserve the buffered complete requests until their responses finish.
+  s=sock();s.sendall(b'GET /health HTTP/1.1\r\nHost: x\r\n\r\n'*130)
+  s.shutdown(socket.SHUT_WR)
+  replies=wire(s,130)
+  check(all(status==200 for status,data in replies),'half-closed pipeline drains all 130 requests')
+  check(s.recv(1)==b'','half-closed pipeline releases the connection');s.close()
   # Cancel receives and interrupt sends while pipelines are backpressured. Closed
   # clients must release their registered slots before those slots are reused.
   before=connection_handles(server.pid)

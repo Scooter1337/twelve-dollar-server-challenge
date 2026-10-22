@@ -37,6 +37,7 @@ const PAUSED: u32 = 32;
 const DIRTY: u32 = 64;
 const CONTINUED: u32 = 128;
 const READY: u32 = 256;
+const READ_EOF: u32 = 512;
 const REARM: u32 = 1024;
 const INDEX_SHIFT: u32 = 11;
 const FLAG_MASK: u32 = (1 << INDEX_SHIFT) - 1;
@@ -587,6 +588,10 @@ impl Worker {
                     }
                 }
                 Ok(Parsed::Incomplete { expect_continue }) => {
+                    if self.clients[fd].state & READ_EOF != 0 {
+                        closing = true;
+                        break;
+                    }
                     if expect_continue && self.clients[fd].state & CONTINUED == 0 {
                         let index = self.dirty(fd);
                         self.output(fd);
@@ -610,6 +615,10 @@ impl Worker {
                 }
             }
         }
+        // A receive EOF ends input, not the already-buffered request queue.
+        // Deferred complete requests still run after checkpoint/backpressure;
+        // an incomplete final request cannot acquire any more bytes.
+        closing |= self.clients[fd].state & READ_EOF != 0 && !deferred;
         if !closing && offset < input.len() {
             if saved.len == 0 {
                 saved.extend(&bytes[offset..]);
@@ -622,6 +631,7 @@ impl Worker {
         }
         if closing {
             self.clients[fd].state |= CLOSING;
+            self.close(fd);
         }
         if self.clients[fd].output.len as usize >= OUTPUT_HIGH {
             self.pause(fd);
@@ -683,14 +693,26 @@ impl Worker {
                     };
                     self.process(fd, bytes, app);
                 }
+            } else if result == 0 {
+                self.clients[fd].state |= READ_EOF;
+                if self.clients[fd].input.len != 0 {
+                    self.schedule(fd);
+                } else {
+                    self.clients[fd].state |= CLOSING;
+                }
             } else if (result != -libc::ENOBUFS && result != -libc::ECANCELED)
                 || self.clients[fd].state & CLOSING != 0
             {
                 self.clients[fd].state |= CLOSING;
                 self.close(fd);
             }
+            // Even a positive terminal CQE can be the final completion after
+            // shutdown. Retry close once RECEIVING has been cleared.
+            if self.clients[fd].state & CLOSING != 0 {
+                self.close(fd);
+            }
             let c = &self.clients[fd];
-            if c.state & (RECEIVING | CLOSING | PAUSED | REARM) == 0 && c.state & LIVE != 0 {
+            if c.state & (RECEIVING | CLOSING | PAUSED | REARM | READ_EOF) == 0 && c.state & LIVE != 0 {
                 if result == -libc::ENOBUFS {
                     // A depleted receive joins a bounded retry pass after buffers
                     // and responses have been returned. Retrying every failure
@@ -743,7 +765,7 @@ impl Worker {
             if self.clients[fd].input.len != 0 {
                 self.schedule(fd);
             }
-            if self.clients[fd].state & (RECEIVING | CLOSING) == 0 {
+            if self.clients[fd].state & (RECEIVING | CLOSING | READ_EOF) == 0 {
                 self.recv(fd);
             }
         }
@@ -869,7 +891,7 @@ impl Worker {
                         continue;
                     }
                     c.state &= !REARM;
-                    if c.state & (LIVE | RECEIVING | CLOSING | PAUSED) == LIVE {
+                    if c.state & (LIVE | RECEIVING | CLOSING | PAUSED | READ_EOF) == LIVE {
                         self.recv(fd);
                     }
                 }
